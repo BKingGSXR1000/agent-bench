@@ -1,0 +1,1 @@
+Build a small browser-based team task tracker. Users should be able to add tasks, assign an owner, mark tasks complete, and filter the list by completion state. Include clear instructions for running it locally.

@@ -1,10 +1,7 @@
-Read AGENTS.md and all current files under docs/ first.
+# Agent Bench Implementation Roadmap
 
-Do not implement Milestone M1 yet.
-
-Create docs/ROADMAP.md documenting the planned implementation milestones for Agent Bench.
-
-Use this milestone structure:
+This roadmap defines implementation order. `AGENTS.md` remains authoritative for
+development rules.
 
 ## M0 — Specification and project skeleton
 Status: completed
@@ -19,6 +16,8 @@ Includes:
 - smoke tests
 
 ## M1 — Configuration models and experiment matrix
+
+Status: completed
 
 Implement:
 - typed persisted configuration models
@@ -182,14 +181,9 @@ Examples:
 
 This component must not generate deterministic benchmark metrics.
 
-Also add a short section explaining:
+## Milestone discipline
 
-- milestones are intentionally incremental;
-- no milestone should be started automatically;
-- each milestone requires tests and review before proceeding;
-- later milestones may be refined when earlier implementation reveals constraints;
-- ROADMAP.md describes implementation order, while AGENTS.md remains authoritative for development rules.
-
-Do not modify unrelated files.
-Run relevant tests after the documentation change.
-Do not start M1.
+Milestones are intentionally incremental. No milestone starts automatically: each
+requires explicit instruction, tests, and review before proceeding. Later milestones
+may be refined when earlier implementation reveals constraints. This roadmap describes
+implementation order, while `AGENTS.md` remains authoritative for development rules.
