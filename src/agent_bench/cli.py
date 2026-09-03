@@ -8,8 +8,14 @@ import typer
 
 from agent_bench import __version__
 from agent_bench.config import ExperimentConfigError, load_experiment
+from agent_bench.git import GitOperationError, resolve_baseline
 from agent_bench.matrix import expand_experiment, generate_run_definitions
 from agent_bench.models import ExperimentDefinition
+from agent_bench.preservation import (
+    PreservationError,
+    restore_artifact,
+    verify_artifact,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -21,6 +27,16 @@ experiment_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(experiment_app, name="experiment")
+git_app = typer.Typer(
+    help="Inspect Git baseline identity without creating a run.",
+    no_args_is_help=True,
+)
+app.add_typer(git_app, name="git")
+artifact_app = typer.Typer(
+    help="Verify or restore an immutable preserved artifact.",
+    no_args_is_help=True,
+)
+app.add_typer(artifact_app, name="artifact")
 
 
 @app.callback(invoke_without_command=True)
@@ -81,6 +97,46 @@ def expand_experiment_command(
             f"{position}\t{run.run_id}\t{run.harness_id}\t{run.profile_id}\t"
             f"{run.prompt_id}\t{run.repetition_index}"
         )
+
+
+@git_app.command("baseline")
+def git_baseline(path: Path, reference: str) -> None:
+    """Resolve a Git baseline reference to an immutable commit."""
+    try:
+        baseline = resolve_baseline(path, reference)
+    except GitOperationError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"repository={baseline.repository}\n"
+        f"reference={baseline.requested_ref}\n"
+        f"commit={baseline.commit}"
+    )
+
+
+@artifact_app.command("verify")
+def artifact_verify(path: Path) -> None:
+    """Verify a preserved result and its reachable Git result ref."""
+    try:
+        manifest = verify_artifact(path)
+    except PreservationError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Verified artifact {manifest.run_id!r}: "
+        f"snapshot={manifest.source_snapshot_sha256}"
+    )
+
+
+@artifact_app.command("restore")
+def artifact_restore(path: Path, destination: Path) -> None:
+    """Verify and restore a preserved source snapshot."""
+    try:
+        manifest = restore_artifact(path, destination)
+    except PreservationError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Restored artifact {manifest.run_id!r} to {destination.resolve()}")
 
 
 def _load_or_exit(path: Path) -> ExperimentDefinition:

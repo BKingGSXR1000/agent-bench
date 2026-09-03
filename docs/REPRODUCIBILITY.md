@@ -24,7 +24,7 @@ Before any run is allocated, a repository reference is resolved to:
 
 Branch and tag names are informational after resolution. Every run manifest records the full commit/tree identity and verifies its temporary detached worktree before submitting the prompt. The baseline checkout is never the agent workspace.
 
-The complete result is preserved separately, with result-tree/snapshot identity and any necessary Git objects pinned against garbage collection.
+The complete result is preserved separately, with result-tree/snapshot identity and any necessary Git objects pinned against garbage collection. The implemented M2 procedure is specified in `PRESERVATION.md`.
 
 ## 3. Model identity
 
@@ -237,7 +237,7 @@ Sealing order is:
 7. compute the manifest digest according to the non-self-referential canonicalization rule; and
 8. read back and verify every required file.
 
-The manifest/checksum representation defines how its own digest field is omitted during hashing to avoid recursion. Any verification failure yields `preservation_failed` and prevents temporary-worktree deletion.
+The manifest/checksum representation defines how its own digest field is omitted during hashing to avoid recursion. In the M2 subset, the sorted checksum listing includes `manifest.json` and excludes only itself; the manifest identifies the listing and does not contain its own digest. Later full-run sealing may add a separate non-self-referential sealed-manifest digest. Any verification failure yields `preservation_failed` and prevents temporary-worktree deletion.
 
 ## 17. Replay record
 

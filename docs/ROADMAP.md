@@ -41,6 +41,8 @@ Do not execute harnesses yet.
 
 ## M2 — Git isolation and immutable result preservation
 
+Status: completed
+
 Implement and test:
 - immutable baseline resolution
 - temporary Git worktree creation

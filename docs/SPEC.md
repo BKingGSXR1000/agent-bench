@@ -72,7 +72,10 @@ The architecture has six boundaries:
 5. **Metrics and reporting** derive versioned deterministic outputs from normalized events and preserved result evidence.
 6. **Post-run assessment** stores manual application review and optional qualitative reasoning analysis in separate data layers.
 
-Only the package/CLI placeholder and these contracts are created in M0. The boundaries are specified now so later components do not weaken isolation, preservation, or metric provenance.
+M0 created the package skeleton and these contracts. M1 implemented definition
+and matrix expansion, and M2 implements the Git-isolation and preservation
+boundary described in `PRESERVATION.md`. Later boundaries remain unimplemented
+until their roadmap milestones.
 
 ## 5. Experiment definitions
 
@@ -122,6 +125,10 @@ The baseline is identified by repository identity and a resolved full commit obj
 Each run operates in a fresh detached Git worktree at that exact commit. The configured baseline checkout is never used as the agent workspace and is never modified. Submodule and large-file state, when applicable, are resolved and recorded as part of baseline identity.
 
 At completion, Agent Bench records Git status, deterministic diff evidence, result-tree identity, and a complete source snapshot independent of the temporary worktree. Any result commit or Git objects needed to reconstruct the outcome are pinned against garbage collection. Untracked and ignored files relevant to executing the result are handled by an explicit preservation policy and cannot be omitted silently.
+
+The concrete M2 result-ref namespace, conservative snapshot policy, artifact
+layout, verification, restoration, and failure-recovery rules are defined in
+`PRESERVATION.md`.
 
 ## 9. Complete result preservation
 
