@@ -25,6 +25,7 @@ def test_loads_valid_experiment_configuration(
     assert len(experiment.harness_profiles) == 4
     assert len(experiment.prompts) == 3
     assert experiment.prompts[0].path.is_absolute()
+    assert experiment.baseline_repository.is_absolute()
     assert experiment.definition_digest
     assert experiment.matrix_digest
 

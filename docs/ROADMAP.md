@@ -59,6 +59,8 @@ Use a fake operation instead of a real coding harness.
 
 ## M3 — Common event model and FakeHarness
 
+Status: completed
+
 Implement:
 - raw event envelope
 - normalized event schema

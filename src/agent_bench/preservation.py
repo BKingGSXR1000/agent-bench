@@ -8,7 +8,7 @@ import os
 import stat
 import tarfile
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -234,6 +234,7 @@ def preserve_worktree(
     experiment_id: str,
     artifacts_root: Path,
     exclusion_policy: ExclusionPolicyRecord = DEFAULT_EXCLUSION_POLICY,
+    supplemental_files: Mapping[str, Path] | None = None,
 ) -> ArtifactManifest:
     """Preserve a prepared worktree without removing it."""
     final_path = _validate_new_run_destination(
@@ -260,6 +261,7 @@ def preserve_worktree(
         (staging_path / "build").mkdir()
         source_directory.mkdir()
         git_directory.mkdir()
+        _copy_supplemental_files(staging_path, supplemental_files or {})
 
         status = git_bytes(
             worktree.path,
@@ -690,6 +692,37 @@ def _write_new(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as output:
         output.write(content)
+
+
+def _copy_supplemental_files(
+    staging_path: Path,
+    supplemental_files: Mapping[str, Path],
+) -> None:
+    reserved_roots = {
+        MANIFEST_PATH,
+        CHECKSUMS_PATH,
+        "source",
+        "git",
+        "build",
+    }
+    for relative_name, source in sorted(supplemental_files.items()):
+        _validate_relative_artifact_path(relative_name)
+        relative_path = PurePosixPath(relative_name)
+        if relative_path.parts[0] in reserved_roots:
+            raise PreservationError(
+                f"supplemental artifact uses reserved path: {relative_name}"
+            )
+        configured_source = source.expanduser().absolute()
+        if configured_source.is_symlink() or not configured_source.is_file():
+            raise PreservationError(
+                f"supplemental artifact is not a regular file: {configured_source}"
+            )
+        source_path = configured_source.resolve()
+        destination = staging_path.joinpath(*relative_path.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with source_path.open("rb") as input_stream, destination.open("xb") as output:
+            for chunk in iter(lambda: input_stream.read(1024 * 1024), b""):
+                output.write(chunk)
 
 
 def _write_manifest(root: Path, manifest: ArtifactManifest) -> None:

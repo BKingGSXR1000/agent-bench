@@ -1,10 +1,13 @@
 import json
+import copy
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from agent_bench import __version__
 from agent_bench.cli import app
+from agent_bench.config import load_experiment
+from agent_bench.matrix import expand_experiment
 from conftest import ExperimentFixture, GitRepositoryFixture
 
 runner = CliRunner()
@@ -19,6 +22,7 @@ def test_cli_help() -> None:
     assert "experiment" in result.output
     assert "git" in result.output
     assert "artifact" in result.output
+    assert "fake-run" in result.output
 
 
 def test_cli_version() -> None:
@@ -120,3 +124,59 @@ def test_cli_reports_artifact_verification_failure(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Error:" in result.output
     assert "missing artifact manifest" in result.output
+
+
+def test_cli_executes_exactly_one_fake_run(
+    experiment_fixture: ExperimentFixture,
+    git_repository: GitRepositoryFixture,
+    tmp_path: Path,
+) -> None:
+    data = copy.deepcopy(experiment_fixture.data)
+    data["baseline_repository"] = str(git_repository.path)
+    data["baseline_revision"] = git_repository.baseline_commit
+    experiment_fixture.write(data)
+    run_id = expand_experiment(load_experiment(experiment_fixture.path))[0].run_id
+    output_root = tmp_path / "fake-run-output"
+
+    result = runner.invoke(
+        app,
+        [
+            "fake-run",
+            str(experiment_fixture.path),
+            run_id,
+            str(output_root),
+            "--scenario",
+            "success",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"run_id={run_id}" in result.output
+    assert "scenario=success" in result.output
+    assert "outcome=success" in result.output
+    assert (output_root / "artifacts" / run_id / "raw/events.jsonl").is_file()
+    assert (
+        output_root / "artifacts" / run_id / "normalized/events.jsonl"
+    ).is_file()
+
+
+def test_cli_rejects_unknown_fake_scenario(
+    experiment_fixture: ExperimentFixture,
+    tmp_path: Path,
+) -> None:
+    run_id = expand_experiment(load_experiment(experiment_fixture.path))[0].run_id
+
+    result = runner.invoke(
+        app,
+        [
+            "fake-run",
+            str(experiment_fixture.path),
+            run_id,
+            str(tmp_path / "output"),
+            "--scenario",
+            "not-real",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "unsupported FakeHarness scenario" in result.output

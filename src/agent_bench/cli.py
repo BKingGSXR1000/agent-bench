@@ -8,6 +8,7 @@ import typer
 
 from agent_bench import __version__
 from agent_bench.config import ExperimentConfigError, load_experiment
+from agent_bench.fake_harness import FAKE_SCENARIOS, FakeHarness
 from agent_bench.git import GitOperationError, resolve_baseline
 from agent_bench.matrix import expand_experiment, generate_run_definitions
 from agent_bench.models import ExperimentDefinition
@@ -16,6 +17,7 @@ from agent_bench.preservation import (
     restore_artifact,
     verify_artifact,
 )
+from agent_bench.runner import RunLifecycleError, execute_run
 
 app = typer.Typer(
     add_completion=False,
@@ -137,6 +139,64 @@ def artifact_restore(path: Path, destination: Path) -> None:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Restored artifact {manifest.run_id!r} to {destination.resolve()}")
+
+
+@app.command("fake-run")
+def fake_run(
+    experiment_path: Path,
+    run_id: str,
+    output_root: Path,
+    scenario: Annotated[
+        str,
+        typer.Option(
+            "--scenario",
+            help="Deterministic FakeHarness scenario.",
+        ),
+    ] = "success",
+) -> None:
+    """Execute exactly one expanded run with the test-only FakeHarness."""
+    experiment = _load_or_exit(experiment_path)
+    if scenario not in FAKE_SCENARIOS:
+        typer.echo(
+            "Error: unsupported FakeHarness scenario; choose one of: "
+            + ", ".join(FAKE_SCENARIOS),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    run_definition = next(
+        (run for run in expand_experiment(experiment) if run.run_id == run_id),
+        None,
+    )
+    if run_definition is None:
+        typer.echo(f"Error: run ID is not in the expanded experiment: {run_id}", err=True)
+        raise typer.Exit(code=1)
+    prompt = next(
+        prompt
+        for prompt in experiment.prompts
+        if prompt.prompt_id == run_definition.prompt_id
+    )
+    resolved_output = output_root.expanduser().resolve()
+    try:
+        result = execute_run(
+            run_definition=run_definition,
+            prompt_content=prompt.content,
+            adapter=FakeHarness(scenario),  # type: ignore[arg-type]
+            adapter_scenario=scenario,
+            artifacts_root=resolved_output / "artifacts",
+            worktrees_root=resolved_output / "worktrees",
+            isolation_root=resolved_output / "runtime",
+        )
+    except (RunLifecycleError, GitOperationError, PreservationError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"run_id={result.run_manifest.run_id}\n"
+        f"scenario={scenario}\n"
+        f"outcome={result.run_manifest.observed_execution_outcome}\n"
+        f"raw_events={result.raw_event_path}\n"
+        f"normalized_events={result.normalized_event_path}\n"
+        f"artifact={result.artifact_path}"
+    )
 
 
 def _load_or_exit(path: Path) -> ExperimentDefinition:

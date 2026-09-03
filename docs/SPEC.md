@@ -73,9 +73,10 @@ The architecture has six boundaries:
 6. **Post-run assessment** stores manual application review and optional qualitative reasoning analysis in separate data layers.
 
 M0 created the package skeleton and these contracts. M1 implemented definition
-and matrix expansion, and M2 implements the Git-isolation and preservation
-boundary described in `PRESERVATION.md`. Later boundaries remain unimplemented
-until their roadmap milestones.
+and matrix expansion, M2 implements the Git-isolation and preservation boundary
+described in `PRESERVATION.md`, and M3 implements common events and a fake-backed
+single-run lifecycle described in `EVENTS_AND_RUNS.md`. Later boundaries remain
+unimplemented until their roadmap milestones.
 
 ## 5. Experiment definitions
 
@@ -234,8 +235,12 @@ Observable first-tool, first-edit, first-test, compaction, truncation, overflow,
 
 Cross-run comparisons support individual overlays, request-index alignment, normalized-time alignment, grouping by harness/profile/prompt and their combinations, and repeated-run median and percentile bands. `REPORTING.md` defines the fixed interpolation and aggregation rules. M0 defines these outputs but does not render charts or reports.
 
-## 16. M0 implementation boundary
+## 16. Incremental implementation boundary
 
-M0 consists only of this specification set, package metadata, an importable `agent_bench` package, a version/help-only CLI placeholder, and smoke tests. It intentionally contains no persisted Pydantic models or runtime orchestration because the milestone asks for the contract before implementation and speculative abstractions are prohibited.
+M0 consisted only of this specification set, package metadata, an importable
+package, a version/help-only CLI placeholder, and smoke tests. M1 through M3 now
+implement definitions/matrix expansion, Git preservation, and the FakeHarness
+single-run path respectively. Real harnesses, a backend/proxy, formal metrics,
+and reports remain outside the implemented boundary.
 
 Subsequent milestones must select a small coherent portion of this contract, inspect current code, implement it with deterministic fake-backed tests, and stop at that milestone boundary.

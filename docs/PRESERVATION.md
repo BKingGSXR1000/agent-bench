@@ -15,6 +15,10 @@ M2 does not create harness adapters, isolated harness homes, event streams, run
 manifests, metrics, artifact builds, or benchmark lifecycle orchestration. Those
 remain assigned to later milestones.
 
+M3 subsequently reuses this boundary and supplies sealed event/run-evidence
+files as supplemental artifacts. M2 preservation remains independent of their
+semantics and includes them in its exact checksum inventory.
+
 ## 2. Baseline and worktree safety
 
 `resolve_baseline` accepts a local Git repository and a reference. It resolves the
@@ -98,9 +102,15 @@ git/result.txt
 git/status.txt
 git/diff.patch
 git/untracked.txt
-git/ignored.txt
-build/
+    git/ignored.txt
+    build/
 ```
+
+Later milestones may add non-reserved supplemental paths before sealing. M3 adds
+`raw/events.jsonl`, `normalized/events.jsonl`, `run/manifest.json`, and its fake
+harness-state record. Supplemental files cannot replace `manifest.json`,
+`checksums.sha256`, or anything under the M2-owned `source/`, `git/`, or `build/`
+roots.
 
 The versioned manifest records the run and experiment IDs, baseline repository
 and commit, result commit and ref, snapshot and diff paths and SHA256 values,

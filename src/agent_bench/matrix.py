@@ -136,6 +136,9 @@ def _make_run_definition(
         "prompt_sha256": prompt.sha256,
         "semantic_task_id": prompt.semantic_task_id,
         "repetition_index": repetition_index,
+        "limits": experiment.run_limits.model_dump(
+            mode="json", exclude={"definition_digest"}
+        ),
     }
     identity_digest = canonical_sha256(intrinsic_identity)
     run_id = (

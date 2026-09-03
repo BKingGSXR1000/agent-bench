@@ -50,6 +50,12 @@ def load_experiment(path: Path) -> ExperimentDefinition:
         )
 
     data: dict[str, Any] = deepcopy(raw)
+    configured_repository = data.get("baseline_repository")
+    if isinstance(configured_repository, str) and configured_repository:
+        repository_path = Path(configured_repository).expanduser()
+        if not repository_path.is_absolute():
+            repository_path = experiment_path.parent / repository_path
+        data["baseline_repository"] = repository_path.resolve()
     data["prompts"] = _load_prompts(data.get("prompts"), experiment_path.parent)
 
     try:

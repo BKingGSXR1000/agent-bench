@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,9 @@ import pytest
 import yaml
 
 from agent_bench.preservation import PreservedRun, preserve_isolated_operation
+from agent_bench.config import load_experiment
+from agent_bench.matrix import generate_run_definitions
+from agent_bench.models import RunDefinition
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,12 @@ class GitRepositoryFixture:
         if check and result.returncode != 0:
             raise AssertionError(result.stderr)
         return result.stdout
+
+
+@dataclass(frozen=True)
+class RunFixture:
+    run_definition: RunDefinition
+    prompt_content: str
 
 
 @pytest.fixture
@@ -260,4 +270,27 @@ def preserved_run(git_repository: GitRepositoryFixture) -> PreservedRun:
         artifacts_root=git_repository.artifacts_root,
         worktrees_root=git_repository.worktrees_root,
         operation=full_result_operation,
+    )
+
+
+@pytest.fixture
+def run_fixture(
+    experiment_fixture: ExperimentFixture,
+    git_repository: GitRepositoryFixture,
+) -> RunFixture:
+    data = copy.deepcopy(experiment_fixture.data)
+    data["baseline_repository"] = str(git_repository.path)
+    data["baseline_revision"] = git_repository.baseline_commit
+    data["run_limits"] = {"wall_timeout_seconds": 0.2}
+    experiment_fixture.write(data)
+    experiment = load_experiment(experiment_fixture.path)
+    run_definition = generate_run_definitions(experiment)[0]
+    prompt = next(
+        prompt
+        for prompt in experiment.prompts
+        if prompt.prompt_id == run_definition.prompt_id
+    )
+    return RunFixture(
+        run_definition=run_definition,
+        prompt_content=prompt.content,
     )

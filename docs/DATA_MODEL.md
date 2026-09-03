@@ -245,6 +245,11 @@ Expansion must never reuse a run ID or overwrite an existing destination.
 
 The authoritative index for one realized run.
 
+M3 implements the execution-linked subset described in `EVENTS_AND_RUNS.md`.
+Its `execution_complete` record and sealed M2 artifact together provide the
+implemented evidence; backend, hardware, metric, and full sealing fields remain
+unavailable until their owning milestones rather than being fabricated.
+
 Required fields:
 
 - `schema_version` and `run_id`;
@@ -288,6 +293,10 @@ Multiple snapshots may exist; the manifest identifies those required by policy.
 
 An append-only envelope around one source record without semantic rewriting.
 
+The concrete M3 1.0.0 envelope, including its stable capture sequence and record
+digest, is specified in `EVENTS_AND_RUNS.md`. Source-native timing, redaction,
+and external payload references remain future optional extensions.
+
 Required fields:
 
 - `schema_version`, `raw_event_id`, and `run_id`;
@@ -307,6 +316,10 @@ If secrets can appear at a boundary, redaction occurs before durable raw persist
 ### 5.4 NormalizedEvent
 
 The common event envelope derived deterministically from raw evidence.
+
+M3 implements direct common-event mapping with integrity-bearing raw references.
+It omits unsupported raw observations and does not populate specialized fields
+that FakeHarness does not expose.
 
 Required fields:
 

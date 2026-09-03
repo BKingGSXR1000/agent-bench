@@ -40,6 +40,7 @@ def canonical_sha256(value: object) -> str:
     """Return a SHA256 digest of a canonical JSON-compatible value."""
     encoded = json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -280,6 +281,12 @@ class ExecutionOrdering(PersistedModel):
         return "seeded-harness-round-robin-v1"
 
 
+class RunLimits(PersistedModel):
+    """Generic task limits that apply independently of a harness."""
+
+    wall_timeout_seconds: float = Field(default=300.0, gt=0)
+
+
 class ExperimentDefinition(PersistedModel):
     """One validated benchmark-v1 experiment matrix definition."""
 
@@ -295,6 +302,7 @@ class ExperimentDefinition(PersistedModel):
     prompts: tuple[PromptDefinition, ...] = Field(min_length=1)
     repetitions: int = Field(ge=1)
     ordering: ExecutionOrdering = Field(default_factory=ExecutionOrdering)
+    run_limits: RunLimits = Field(default_factory=RunLimits)
 
     @field_validator("created_at")
     @classmethod
@@ -389,6 +397,9 @@ class ExperimentDefinition(PersistedModel):
                 "harness_profiles": profiles,
                 "prompts": prompts,
                 "repetitions": self.repetitions,
+                "run_limits": self.run_limits.model_dump(
+                    mode="json", exclude={"definition_digest"}
+                ),
             }
         )
 
@@ -415,3 +426,4 @@ class RunDefinition(PersistedModel):
     prompt_sha256: Sha256
     semantic_task_id: Identifier
     repetition_index: int = Field(ge=1)
+    limits: RunLimits
