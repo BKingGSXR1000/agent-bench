@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import tarfile
 import tempfile
 from collections.abc import Callable, Mapping
@@ -37,6 +38,8 @@ EXCLUDED_PATHS_PATH = "source/excluded.txt"
 CHECKSUMS_PATH = "checksums.sha256"
 MANIFEST_PATH = "manifest.json"
 GIT_DIFF_PATH = "git/diff.patch"
+GIT_TRACKED_NUMSTAT_PATH = "git/tracked-numstat.json"
+GIT_UNTRACKED_NUMSTAT_PATH = "git/untracked-numstat.json"
 
 
 class PreservationError(RuntimeError):
@@ -146,6 +149,52 @@ class ArtifactManifest(BaseModel):
         if self.result_ref != expected:
             raise ValueError(f"result_ref must be {expected}")
         return self
+
+
+class GitNumstatEntry(BaseModel):
+    """Git-native line accounting for one preserved non-tracked path."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    path: str = Field(min_length=1)
+    lines_added: int | None = Field(default=None, ge=0)
+    lines_deleted: int | None = Field(default=None, ge=0)
+    binary: bool
+    availability: Literal["available", "unavailable"]
+    unavailable_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_availability(self) -> GitNumstatEntry:
+        _validate_relative_artifact_path(self.path)
+        if self.availability == "available":
+            if self.unavailable_reason is not None:
+                raise ValueError("available numstat cannot have an unavailable reason")
+            if not self.binary and (self.lines_added is None or self.lines_deleted is None):
+                raise ValueError("available text numstat requires line counts")
+            if self.binary and (self.lines_added is not None or self.lines_deleted is not None):
+                raise ValueError("binary numstat cannot have text line counts")
+        elif (
+            self.unavailable_reason is None
+            or self.lines_added is not None
+            or self.lines_deleted is not None
+        ):
+            raise ValueError("unavailable numstat requires null counts and a reason")
+        return self
+
+
+class GitNumstatRecord(BaseModel):
+    """Versioned preservation-time Git-native line-count evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    algorithm: Literal[
+        "git-diff-numstat-no-renames-v1",
+        "git-diff-no-index-numstat-v1",
+    ]
+    git_version: str = Field(min_length=1)
+    entries: tuple[GitNumstatEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -267,6 +316,7 @@ def preserve_worktree(
             worktree.path,
             "status",
             "--porcelain=v1",
+            "--no-renames",
             "--untracked-files=all",
             "--ignored=matching",
         )
@@ -276,6 +326,16 @@ def preserve_worktree(
             "--binary",
             "--full-index",
             "--no-ext-diff",
+            "--no-renames",
+            worktree.baseline_commit,
+            "--",
+        )
+        tracked_numstat = git_bytes(
+            worktree.path,
+            "diff",
+            "--numstat",
+            "--no-renames",
+            "-z",
             worktree.baseline_commit,
             "--",
         )
@@ -297,8 +357,24 @@ def preserve_worktree(
 
         _write_new(git_directory / "status.txt", status)
         _write_new(git_directory / "diff.patch", diff)
+        git_version = _git_version()
+        _write_new(
+            staging_path / GIT_TRACKED_NUMSTAT_PATH,
+            _model_json_bytes(_parse_tracked_numstat(tracked_numstat, git_version)),
+        )
         _write_new(git_directory / "untracked.txt", _inventory_text(untracked))
         _write_new(git_directory / "ignored.txt", _inventory_text(ignored))
+        _write_new(
+            staging_path / GIT_UNTRACKED_NUMSTAT_PATH,
+            _model_json_bytes(
+                _capture_untracked_numstat(
+                    worktree.path,
+                    untracked + ignored,
+                    exclusion_policy,
+                    git_version,
+                )
+            ),
+        )
         _write_new(
             git_directory / "baseline.txt",
             f"{worktree.baseline_commit}\n".encode("ascii"),
@@ -475,8 +551,10 @@ def _verify_artifact(
         "git/result.txt",
         "git/status.txt",
         manifest.git_diff_path,
+        GIT_TRACKED_NUMSTAT_PATH,
         "git/untracked.txt",
         "git/ignored.txt",
+        GIT_UNTRACKED_NUMSTAT_PATH,
     }
     missing_checksums = required_checksum_paths - checksums.keys()
     if missing_checksums:
@@ -780,6 +858,139 @@ def _inventory_text(raw_paths: bytes) -> bytes:
         if path
     ]
     return _quoted_lines(tuple(sorted(paths, key=os.fsencode)))
+
+
+def _capture_untracked_numstat(
+    worktree: Path,
+    raw_paths: bytes,
+    policy: ExclusionPolicyRecord,
+    git_version: str,
+) -> GitNumstatRecord:
+    paths = sorted({item for item in raw_paths.split(b"\0") if item})
+    entries: list[GitNumstatEntry] = []
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+    for raw_path in paths:
+        path = raw_path.decode("utf-8", errors="surrogateescape")
+        relative = PurePosixPath(path)
+        absolute = worktree.joinpath(*relative.parts)
+        if _is_excluded(relative, absolute.is_dir(), policy) or absolute.is_dir():
+            continue
+        completed = subprocess.run(
+            ["git", "diff", "--no-index", "--numstat", "--", os.devnull, path],
+            cwd=worktree,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        if completed.returncode not in {0, 1}:
+            entries.append(
+                GitNumstatEntry(
+                    path=path,
+                    binary=False,
+                    availability="unavailable",
+                    unavailable_reason="git-diff-no-index-failed",
+                )
+            )
+            continue
+        lines = completed.stdout.splitlines()
+        if len(lines) != 1:
+            entries.append(
+                GitNumstatEntry(
+                    path=path,
+                    binary=False,
+                    availability="unavailable",
+                    unavailable_reason="unexpected-git-numstat-record-count",
+                )
+            )
+            continue
+        fields = lines[0].split(b"\t", 2)
+        if len(fields) != 3:
+            entries.append(
+                GitNumstatEntry(
+                    path=path,
+                    binary=False,
+                    availability="unavailable",
+                    unavailable_reason="malformed-git-numstat",
+                )
+            )
+            continue
+        binary = fields[0] == b"-" or fields[1] == b"-"
+        entries.append(
+            GitNumstatEntry(
+                path=path,
+                lines_added=None if binary else int(fields[0]),
+                lines_deleted=None if binary else int(fields[1]),
+                binary=binary,
+                availability="available",
+            )
+        )
+    return GitNumstatRecord(
+        algorithm="git-diff-no-index-numstat-v1",
+        git_version=git_version,
+        entries=tuple(entries),
+    )
+
+
+def _parse_tracked_numstat(raw: bytes, git_version: str) -> GitNumstatRecord:
+    entries: list[GitNumstatEntry] = []
+    for record in (item for item in raw.split(b"\0") if item):
+        fields = record.split(b"\t", 2)
+        if len(fields) != 3:
+            raise PreservationError("Git produced malformed tracked numstat")
+        path = fields[2].decode("utf-8", errors="surrogateescape")
+        binary = fields[0] == b"-" or fields[1] == b"-"
+        entries.append(
+            GitNumstatEntry(
+                path=path,
+                lines_added=None if binary else int(fields[0]),
+                lines_deleted=None if binary else int(fields[1]),
+                binary=binary,
+                availability="available",
+            )
+        )
+    return GitNumstatRecord(
+        algorithm="git-diff-numstat-no-renames-v1",
+        git_version=git_version,
+        entries=tuple(entries),
+    )
+
+
+def _git_version() -> str:
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+    return subprocess.run(
+        ["git", "--version"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        text=True,
+    ).stdout.strip()
+
+
+def _model_json_bytes(value: BaseModel) -> bytes:
+    return (
+        json.dumps(
+            value.model_dump(mode="json"),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("ascii")
 
 
 def _quoted_lines(paths: tuple[str, ...]) -> bytes:

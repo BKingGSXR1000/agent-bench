@@ -1,7 +1,19 @@
 # Agent Bench Deterministic Metrics
 
-Status: Milestone M0 metric specification  
+Status: Milestone M4 implemented metric specification
 Specification version: 1.0.0
+
+The concrete persisted schema, provenance, storage, and current capture boundary
+are documented in `METRICS_ENGINE.md`.
+
+M4 persists the concrete names requested by the implementation milestone:
+aggregate token fields use the `_total` suffix, LLM/tool behavior counts use
+`*_count` or `tool_calls_*`, and compaction fields use
+`number_of_compactions`, `context_at_first_compaction_tokens`, and
+`context_utilization_at_first_compaction_percent`. The shorter names in the
+tables below remain the metric-definition names. Timing is calculated from
+monotonic nanoseconds and persisted in the explicitly named `*_seconds` fields
+with `units = seconds`.
 
 ## 1. Metric contract
 

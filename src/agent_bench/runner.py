@@ -418,6 +418,7 @@ def _execute_and_record(
                     worktree.path,
                     "status",
                     "--porcelain=v1",
+                    "--no-renames",
                     "--untracked-files=all",
                     "--ignored=matching",
                 )
@@ -427,7 +428,7 @@ def _execute_and_record(
                     event_type="workspace_status",
                     payload={
                         "has_changes": has_changes,
-                        "method": "git-status-porcelain-v1-with-ignored",
+                        "method": "git-status-porcelain-v1-with-ignored-no-renames",
                     },
                 )
                 outcome = "success" if has_changes else "no_changes"

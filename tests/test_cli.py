@@ -22,6 +22,7 @@ def test_cli_help() -> None:
     assert "experiment" in result.output
     assert "git" in result.output
     assert "artifact" in result.output
+    assert "metrics" in result.output
     assert "fake-run" in result.output
 
 

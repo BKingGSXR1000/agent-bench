@@ -81,6 +81,8 @@ No real LLM or real harness yet.
 
 ## M4 — Deterministic metrics engine
 
+Status: completed
+
 Implement metrics from docs/METRICS.md using fixtures and FakeHarness runs.
 
 Include:

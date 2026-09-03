@@ -11,6 +11,12 @@ from agent_bench.config import ExperimentConfigError, load_experiment
 from agent_bench.fake_harness import FAKE_SCENARIOS, FakeHarness
 from agent_bench.git import GitOperationError, resolve_baseline
 from agent_bench.matrix import expand_experiment, generate_run_definitions
+from agent_bench.metrics import MetricsCalculationError, calculate_run_metrics
+from agent_bench.metrics_storage import (
+    MetricsStorageError,
+    store_metrics_artifact,
+    verify_metrics_artifact,
+)
 from agent_bench.models import ExperimentDefinition
 from agent_bench.preservation import (
     PreservationError,
@@ -39,6 +45,11 @@ artifact_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(artifact_app, name="artifact")
+metrics_app = typer.Typer(
+    help="Calculate or inspect deterministic metrics for a preserved run.",
+    no_args_is_help=True,
+)
+app.add_typer(metrics_app, name="metrics")
 
 
 @app.callback(invoke_without_command=True)
@@ -139,6 +150,49 @@ def artifact_restore(path: Path, destination: Path) -> None:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Restored artifact {manifest.run_id!r} to {destination.resolve()}")
+
+
+@metrics_app.command("calculate")
+def metrics_calculate(source_artifact: Path, output_root: Path) -> None:
+    """Calculate and seal a separate immutable metrics artifact."""
+    try:
+        metrics = calculate_run_metrics(source_artifact)
+        stored = store_metrics_artifact(
+            source_artifact=source_artifact,
+            output_root=output_root,
+            metrics=metrics,
+        )
+    except (MetricsCalculationError, MetricsStorageError, PreservationError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"run_id={metrics.run_id}\n"
+        f"termination={metrics.termination.termination_class}\n"
+        f"metrics_sha256={stored.manifest.metrics_sha256}\n"
+        f"metrics_artifact={stored.root}"
+    )
+
+
+@metrics_app.command("show")
+def metrics_show(path: Path) -> None:
+    """Print validated metrics JSON, calculating in memory for a run artifact."""
+    resolved = path.expanduser().resolve()
+    try:
+        if resolved.name == "metrics.json" or (resolved / "metrics.json").is_file():
+            metrics = verify_metrics_artifact(resolved).metrics
+        else:
+            metrics = calculate_run_metrics(resolved)
+    except (MetricsCalculationError, MetricsStorageError, PreservationError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            metrics.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 @app.command("fake-run")

@@ -1,6 +1,6 @@
 # Agent Bench Persisted Data Model
 
-Status: Milestone M0 logical data model  
+Status: Milestone M0 logical model with M1–M4 concrete subsets
 Specification version: 1.0.0
 
 ## 1. Conventions
@@ -440,13 +440,19 @@ Required fields:
 - metric-definition specification version;
 - calculator implementation/version and configuration digest;
 - normalized dataset and Git summary input digests;
-- calculation timestamp;
+- no calculation timestamp in identity-bearing metric content; an operational
+  storage time, if introduced later, belongs in separate non-identity metadata;
 - one record per metric containing name, typed value or unavailable status, units, source references, method/source class, and edge-case notes;
 - primary termination classification and supporting references;
 - validation status; and
 - metrics record digest.
 
 Zero and unavailable are distinct. Recalculation under changed definitions writes a new `RunMetrics` record.
+M4 implements this as structured versioned metric groups whose scalar values
+carry units, availability/reason, source method, normalized-event references,
+and artifact references. It stores the result in a separately checksummed
+immutable analysis artifact linked to the sealed source artifact by manifest and
+run-manifest SHA256. See `METRICS_ENGINE.md` for the concrete 1.0.0 contract.
 
 ### 6.2 ManualReview
 

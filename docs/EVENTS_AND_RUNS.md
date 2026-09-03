@@ -11,8 +11,8 @@ isolation and preservation, adds raw and normalized event streams, allocates
 fresh filesystem state, enforces a wall-clock deadline, and persists a minimal
 run manifest.
 
-M3 does not run an LLM, llama.cpp, OpenCode, Pi, or Hermes. It does not calculate
-metrics or claim final M4 termination classification.
+M3 does not run an LLM, llama.cpp, OpenCode, Pi, or Hermes. M4 subsequently
+calculates metrics and formal termination without changing this M3 evidence.
 
 ## 2. Raw event envelope
 
@@ -92,6 +92,7 @@ that all isolated paths existed during execution.
 | `crash` | Emits reasoning and raises `FakeHarnessCrash` | `harness_crash` |
 | `output_truncation` | Emits a fake LLM-response-like record and direct truncation signal | `output_truncation` |
 | `reasoning_without_action` | Emits one reasoning/response turn and no tool event | `no_changes` |
+| `metrics` | Emits directly sourced synthetic LLM/token/context/compaction, duplicate/read/edit/shell/test evidence and a mixed Git result | `success` |
 
 The fake response records explicitly mark token counts not applicable. M3 does
 not invent model or token observations.
@@ -174,8 +175,8 @@ judgment is performed in M3.
 
 For ordinary FakeHarness completion only, M3 distinguishes `success` from
 `no_changes` using the recorded Git porcelain observation, including untracked
-and ignored paths. M4 will replace this groundwork with its specified complete
-Git comparison and formal termination classifier.
+and ignored paths. M4 now provides the specified complete Git comparison and
+formal termination classifier in a separate analysis artifact.
 
 ## 10. Diagnostic CLI
 

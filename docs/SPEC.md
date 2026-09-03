@@ -238,9 +238,10 @@ Cross-run comparisons support individual overlays, request-index alignment, norm
 ## 16. Incremental implementation boundary
 
 M0 consisted only of this specification set, package metadata, an importable
-package, a version/help-only CLI placeholder, and smoke tests. M1 through M3 now
+package, a version/help-only CLI placeholder, and smoke tests. M1 through M4 now
 implement definitions/matrix expansion, Git preservation, and the FakeHarness
-single-run path respectively. Real harnesses, a backend/proxy, formal metrics,
-and reports remain outside the implemented boundary.
+single-run path, plus separate immutable deterministic metrics artifacts.
+Real harnesses, a backend/proxy, and reports remain outside the implemented
+boundary. `METRICS_ENGINE.md` defines the implemented M4 boundary.
 
 Subsequent milestones must select a small coherent portion of this contract, inspect current code, implement it with deterministic fake-backed tests, and stop at that milestone boundary.

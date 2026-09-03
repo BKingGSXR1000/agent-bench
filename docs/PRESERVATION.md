@@ -17,7 +17,9 @@ remain assigned to later milestones.
 
 M3 subsequently reuses this boundary and supplies sealed event/run-evidence
 files as supplemental artifacts. M2 preservation remains independent of their
-semantics and includes them in its exact checksum inventory.
+semantics and includes them in its exact checksum inventory. M4 adds a small
+versioned Git-native numstat record for preserved untracked/ignored files,
+because those files cannot appear in the tracked diff.
 
 ## 2. Baseline and worktree safety
 
@@ -101,9 +103,11 @@ git/baseline.txt
 git/result.txt
 git/status.txt
 git/diff.patch
+git/tracked-numstat.json
 git/untracked.txt
-    git/ignored.txt
-    build/
+git/ignored.txt
+git/untracked-numstat.json
+build/
 ```
 
 Later milestones may add non-reserved supplemental paths before sealing. M3 adds
@@ -130,7 +134,17 @@ later data-layer milestones.
 
 The `git/*.txt` inventories use one JSON-quoted Git path per line, preserving
 unusual UTF-8 paths without treating filenames as shell syntax. `git/diff.patch`
-is a full-index binary-capable diff against the immutable baseline.
+is a full-index binary-capable diff against the immutable baseline. Rename
+detection is disabled for both status and diff evidence, so renames remain
+deterministic create/delete pairs.
+`git/untracked-numstat.json` is a schema-versioned record of the Git version,
+fixed `git diff --no-index --numstat` method, and text-line or binary result for
+each preserved non-tracked file. It is raw preservation evidence for M4, not a
+precomputed benchmark conclusion.
+`git/tracked-numstat.json` records the corresponding fixed
+`git diff --numstat --no-renames` evidence for tracked paths. Capturing both at
+preservation time makes later metric calculation independent of the analysis
+host's installed Git version.
 
 ## 6. Verification, restoration, and failure recovery
 
