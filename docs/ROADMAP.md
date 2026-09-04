@@ -143,6 +143,8 @@ Same requirements as M6 for Pi.
 
 ## M8 — Hermes adapter
 
+Status: completed
+
 Same requirements as M6 for Hermes.
 
 ## M9 — Analytical storage and deterministic reporting

@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0.0",
+  "product": "Hermes Agent",
+  "version": "0.21.0",
+  "source": {
+    "upstream": "NousResearch/hermes-agent",
+    "source_commit": "b3576a29c3f1a71f087c749a69fbb28f4e9628d6",
+    "source_commit_subject": "Merge pull request #97354 from NousResearch/fix/nous-org-model-policy",
+    "source_root": "/home/bking/AI/agent-bench/toolchains/hermes/0.21.0/source",
+    "pyproject_sha256": "e3a85c15204210e94f31ed07cfa29ecc2c20281fb174ce12076efc0c88ca5399",
+    "uv_lock_sha256": "383cd8f98ec23dc3fe4cf63759ec73be5a869cc953f068b4e79ec4e8ed00287d",
+    "tree_digest_algorithm": "sha256 over sorted F\\0path\\0content_sha256\\n and L\\0path\\0target\\n records",
+    "tree_sha256": "8f83b2c3fa512e96a374cabab8c81fed19f1f9c1d9ef6398532e4e466ccb1662",
+    "tree_records": 7429
+  },
+  "installation": {
+    "method": "benchmark-managed local materialization of the exact upstream git source, resolved uv virtual environment, and CPython runtime",
+    "root": "/home/bking/AI/agent-bench/toolchains/hermes/0.21.0",
+    "venv_root": "/home/bking/AI/agent-bench/toolchains/hermes/0.21.0/venv",
+    "venv_tree_sha256": "8f4be886be35f8b3a29ca52987fc5c6d08141ab111a42ec7a549fdbc5f6175b5",
+    "venv_tree_records": 10340,
+    "payload_size_bytes": 422234788
+  },
+  "python": {
+    "root": "/home/bking/AI/agent-bench/toolchains/python/3.11.16",
+    "executable_path": "/home/bking/AI/agent-bench/toolchains/hermes/0.21.0/venv/bin/python",
+    "executable_sha256": "bba9c5269e5794349c1b3bf2bcec677315462a4419dadcc3caefd43fb24d8c94",
+    "version": "Python 3.11.16",
+    "tree_sha256": "e0d0fb867accd24fb6905fea34d0de69c22822b7afeb0687fab07ad8e2a443ad",
+    "tree_records": 5248,
+    "runtime_provenance": "uv-managed CPython copied into Agent Bench; no Hermes-owned runtime path is used at execution"
+  },
+  "node": {
+    "executable_path": "/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin/node",
+    "executable_sha256": "19235a9b678f84729464c52623f92de130a165452747c6826d3fdc13df3abcc3",
+    "version": "v26.8.1",
+    "runtime_provenance": "benchmark-managed Node runtime reused only for Hermes's upstream optional Node-command discovery; no Hermes-owned Node path is used at execution"
+  },
+  "runtime": {
+    "entrypoint_path": "/home/bking/AI/agent-bench/toolchains/hermes/0.21.0/venv/bin/hermes",
+    "entrypoint_sha256": "a11e53130d012787b991e9a9c83229d10bc463d47815f992db9e1f1c53ec5297",
+    "version_output": "0.21.0",
+    "runtime_type": "Python console entrypoint with benchmark-managed CPython and uv-locked site packages"
+  },
+  "provenance": {
+    "materialization_source": "/home/bking/.hermes/hermes-agent (read-only source and resolved environment only)",
+    "personal_runtime_used_at_benchmark_execution": false,
+    "personal_configuration_or_state_copied": false
+  }
+}

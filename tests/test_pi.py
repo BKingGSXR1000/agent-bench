@@ -11,6 +11,7 @@ import pytest
 from agent_bench.events import RawEventWriter, load_normalized_events, load_raw_events
 from agent_bench.harness import HarnessRunContext, HarnessRunPaths
 from agent_bench.models import RunLimits
+from agent_bench.metrics import calculate_run_metrics
 from agent_bench.pi import (
     PiAdapter,
     PiError,
@@ -173,6 +174,15 @@ def test_adapter_preserves_native_session_exact_prompt_and_metrics(tmp_path: Pat
     assert {event.event_kind for event in normalized} >= {'reasoning','file_read','file_edit','test_execution','compaction_start','compaction_end'}
     assert pi_capture_capabilities().session_identity == 'harness_exact'
     assert pi_capture_capabilities().compaction_events == 'harness_exact'
+
+
+def test_live_pi_tool_event_observation_is_not_compared_as_execution_timing(tmp_path: Path, git_repository: GitRepositoryFixture, run_fixture: RunFixture) -> None:
+    node = _fake_node(tmp_path / 'node')
+    definition = run_fixture.run_definition.model_copy(update={'run_id':'pi-fixture-timing','harness_id':'pi','profile_id':'pi-default-v1','limits':RunLimits(wall_timeout_seconds=5), 'prompt_sha256': EXACT_PROMPT_SHA256})
+    result = execute_run(run_definition=definition, prompt_content=EXACT_PROMPT, adapter=PiAdapter(_profile_for(node), verify_toolchain=False), artifacts_root=git_repository.artifacts_root, worktrees_root=git_repository.worktrees_root, isolation_root=tmp_path / 'timing-isolation', proxy_endpoint='http://127.0.0.1:18081/v1', run_seed=1001)
+    metrics = calculate_run_metrics(result.artifact_path)
+    assert metrics.timing.time_to_first_tool_call_seconds.availability == 'unavailable'
+    assert metrics.timing.time_to_first_edit_seconds.unavailable_reason == 'native_execution_timestamp_not_exposed'
 
 
 def test_adapter_crash_and_timeout_are_preserved(tmp_path: Path, git_repository: GitRepositoryFixture, run_fixture: RunFixture) -> None:

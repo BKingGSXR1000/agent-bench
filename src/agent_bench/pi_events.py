@@ -10,7 +10,7 @@ from agent_bench.events import DerivedEvent, RawEvent, normalize_raw_events
 from agent_bench.models import JsonMapping, canonical_sha256
 
 PI_NORMALIZER_NAME = "agent-bench-pi"
-PI_NORMALIZER_VERSION = "1.0.0"
+PI_NORMALIZER_VERSION = "1.0.1"
 _COMMON_TYPES = frozenset({"run_start", "run_end", "llm_request", "llm_response", "reasoning", "tool_call_start", "tool_call_end", "file_read", "file_search", "file_edit", "file_write", "shell_command", "test_execution", "compaction_start", "compaction_end", "output_truncation", "context_overflow", "harness_error", "backend_error", "timeout", "process_termination"})
 _TOOL_CATEGORIES = {"read": "read", "grep": "search", "find": "search", "ls": "search", "edit": "edit", "write": "write", "bash": "shell", "powershell": "shell"}
 PI_NORMALIZER_CONFIGURATION_DIGEST = canonical_sha256({"normalizer": PI_NORMALIZER_NAME, "version": PI_NORMALIZER_VERSION, "common_types": sorted(_COMMON_TYPES), "tool_categories": _TOOL_CATEGORIES, "native_event_type": "pi_event", "test_classifier": "pi-shell-test-v1"})
@@ -61,7 +61,16 @@ class _PiTransformer:
         command = _string_field(arguments, "command")
         if category == "shell" and command and is_test_command(command): category = "test"
         path = _relative_path(_tool_path(arguments), self._workspace)
-        payload: JsonMapping = {"tool_call_id": call_id, "tool_name": name, "category": category, "arguments": arguments}
+        payload: JsonMapping = {
+            "tool_call_id": call_id,
+            "tool_name": name,
+            "category": category,
+            "arguments": arguments,
+            # Pi exposes a live event named tool_execution_start, but does not
+            # expose a native timestamp.  Agent Bench records when it observes
+            # the line; that is not an exact execution-clock measurement.
+            "timing_semantics": "tool_event_observed",
+        }
         if path is not None: payload["path"] = path
         if command is not None: payload.update({"command": command, "working_directory": self._workspace, "environment": {}, "uses_shell": True})
         events = [DerivedEvent("tool_call_start", payload, "parsed")]
@@ -77,7 +86,11 @@ class _PiTransformer:
         call_id = native.get("toolCallId")
         if not isinstance(call_id, str): return ()
         result = native.get("result")
-        payload: JsonMapping = {"tool_call_id": call_id, "outcome": "failure" if native.get("isError") is True else "success"}
+        payload: JsonMapping = {
+            "tool_call_id": call_id,
+            "outcome": "failure" if native.get("isError") is True else "success",
+            "timing_semantics": "tool_event_observed",
+        }
         if result is not None:
             encoded = canonical_sha256(result)
             payload["result_sha256"] = encoded

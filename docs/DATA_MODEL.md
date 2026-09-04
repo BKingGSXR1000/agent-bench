@@ -428,6 +428,13 @@ Required event payload fields:
 
 A correlated representation of a tool invocation. It may be stored as one completed event or linked start/end normalized events, but the chosen representation is fixed by schema version.
 
+Tool timestamps carry an explicit timing semantic when used for timing
+metrics: `harness_tool_execution_start`, `harness_tool_execution_end`,
+`tool_event_observed`, or `model_tool_call_observed`. Capture/flush timestamps
+are not silently upgraded to execution timestamps. A versioned derived timing
+analysis may preserve multiple semantics for one call and cross-run comparison
+requires identical semantics and methods.
+
 Required payload fields:
 
 - stable `tool_call_id` within the run;
@@ -505,7 +512,24 @@ and artifact references. It stores the result in a separately checksummed
 immutable analysis artifact linked to the sealed source artifact by manifest and
 run-manifest SHA256. See `METRICS_ENGINE.md` for the concrete 1.0.0 contract.
 
-### 6.2 ManualReview
+### 6.2 ContextAnalysis
+
+`ContextAnalysis` is a separately sealed schema version (`2.0.0` initially),
+not a mutation of `RunMetrics`. It records source artifact/event-stream hashes,
+the preserved prompt hash, stable available prompt-producing configuration file
+hashes, request rows, diagnostic discovery traffic, the first task request, and
+auxiliary-before-task aggregates. Each request row includes a reference/hash for
+the exact redacted proxy body, structure hashes, deterministic purpose status,
+API-exact context/usage observations when supplied, configured maximum context,
+utilization, and previous/task-relative deltas.
+
+The component fields are explicit for system/harness, tool schema,
+skills/planning, project instruction, user task, assistant text/reasoning/tool
+call, tool result, and other content. Each is independently unavailable unless
+exact attribution is supported by recorded tokenizer/template provenance. The
+analysis record and its external analysis-artifact manifest are immutable.
+
+### 6.3 ManualReview
 
 Stores human assessment without changing run evidence.
 
@@ -524,7 +548,7 @@ Required fields:
 
 Corrections append a new revision. They never alter the preserved source or deterministic metrics.
 
-### 6.3 QualitativeAnalysis
+### 6.4 QualitativeAnalysis
 
 Although optional, qualitative output has its own persisted schema rather than sharing `RunMetrics`.
 

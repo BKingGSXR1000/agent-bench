@@ -1,7 +1,7 @@
 # Agent Bench Deterministic Metrics
 
 Status: Milestone M4 implemented metric specification
-Specification version: 1.0.0
+Specification version: 1.0.1
 
 The concrete persisted schema, provenance, storage, and current capture boundary
 are documented in `METRICS_ENGINE.md`.
@@ -38,20 +38,57 @@ Backend startup, model load, readiness, and warmup are separate phases and are e
 
 For aggregate active time, every valid completed interval is summed. Overlapping LLM intervals or overlapping tool intervals are each counted because the metric represents cumulative component time, not exclusive wall-clock occupancy. A report must not imply that component sums add to wall time. Unpaired/incomplete intervals are excluded only when a valid duration cannot be recovered; the aggregate is unavailable if capture completeness cannot be established, otherwise the count of excluded intervals is reported beside it.
 
+### Tool-timing provenance extension
+
+`metrics-v1` timing fields named `time_to_first_tool_call`,
+`time_to_first_edit`, and tool-execution duration mean **harness execution
+boundaries** only when the normalizer explicitly declares
+`harness_tool_execution_start` and, for durations, a corresponding
+`harness_tool_execution_end`. A captured event, a delayed session export, and a
+model response containing a tool call are distinct observations. They must not
+populate execution timing merely because their order is known.
+
+`timing-provenance-v1` is a separate immutable analysis layer. It records the
+following non-interchangeable semantic fields when evidence exists:
+
+- `harness_tool_execution_start` / `harness_tool_execution_end`;
+- `tool_event_observed` (Agent Bench observed a native event); and
+- `model_tool_call_observed` (the proxy observed a model response with a tool
+  call).
+
+Cross-harness reports may compare a timing field only when both its semantic
+label and its timing method match. `tool_event_observed` and
+`model_tool_call_observed` are useful diagnostic timings, not substitutes for
+execution start. When a harness does not expose an execution timestamp, the
+execution metric is unavailable with
+`native_execution_timestamp_not_exposed`; it is never estimated from capture
+or export time.
+
 ## 3. Timing metrics
 
 | Metric | Exact definition | Source data | Units | Unavailable and edge cases |
 |---|---|---|---|---|
 | `wall_time` | `task_end.monotonic_ns - task_start.monotonic_ns` | Run start/end normalized events or manifest timing boundaries | nanoseconds; reports may display seconds | Unavailable if either boundary or a comparable monotonic clock is absent. Zero is valid only when equal verified boundaries exist. Failure runs use their terminal boundary and remain measurable. |
 | `llm_time` | Sum of duration for all completed correlated LLM request/response operations in the task interval | `LLMRequestEvent`, `LLMResponseEvent`, or exact proxy/backend timings | nanoseconds | Unavailable if LLM timing coverage is incomplete or clocks cannot be correlated. Cancelled/error responses count through their observed completion. Overlaps are summed. |
-| `tool_execution_time` | Sum of durations of all completed correlated tool calls, across every category | `ToolCallEvent` start/end data | nanoseconds | Unavailable when tool timing capture is incomplete. Failed/cancelled calls count through observed end. Overlaps are summed. |
+| `tool_execution_time` | Sum of durations of all completed correlated tool calls, across every category | Explicit harness execution-start/end `ToolCallEvent` data | nanoseconds | Unavailable when tool timing capture is incomplete or either execution boundary is not exposed. Failed/cancelled calls count through observed end only when that end is an explicit execution boundary. Overlaps are summed. |
 | `shell_execution_time` | Sum of completed tool-call durations whose normalized category is `shell` or `test` executed through a shell | `ToolCallEvent` | nanoseconds | Same interval rules as tool time. A test-shell call contributes once, not twice. |
 | `time_to_first_llm_request` | First LLM request start elapsed time minus `task_start` | `LLMRequestEvent`, task boundary | nanoseconds | Unavailable if no request is observed or capture cannot prove request coverage. Never represented as wall time. |
-| `time_to_first_tool_call` | Earliest tool-call start elapsed time minus `task_start` | `ToolCallEvent`, task boundary | nanoseconds | Unavailable with reason `event_not_observed` when complete capture shows no call; unavailable with `capture_failed` when coverage is incomplete. |
-| `time_to_first_edit` | Earliest start time of an `edit` or `write` call that targets the worktree and is deterministically classified as a mutation, minus `task_start` | `ToolCallEvent` and normalized target path | nanoseconds | A failed mutation attempt still qualifies as the first edit attempt and is marked as such; reports may separately show first successful edit. Calls outside the worktree do not qualify. Unavailable if absent/ambiguous. |
+| `time_to_first_tool_call` | Earliest explicit harness tool-execution-start elapsed time minus `task_start` | `ToolCallEvent` carrying `harness_tool_execution_start`, task boundary | nanoseconds | Unavailable with `event_not_observed` when complete capture shows no call; `capture_failed` when coverage is incomplete; or `native_execution_timestamp_not_exposed` when calls are observed but no execution-start clock exists. |
+| `time_to_first_edit` | Earliest explicit harness execution-start time of an `edit` or `write` call that targets the worktree and is deterministically classified as a mutation, minus `task_start` | Explicit execution-start `ToolCallEvent` and normalized target path | nanoseconds | A failed mutation attempt still qualifies as the first edit attempt and is marked as such; reports may separately show first successful edit. Calls outside the worktree do not qualify. Unavailable if absent/ambiguous or an execution-start timestamp is not exposed. |
 | `time_to_first_test_command` | Earliest start of a normalized `test` event, minus `task_start` | Test-execution event or `ToolCallEvent` classified by the versioned command classifier | nanoseconds | Test-looking prose does not qualify. If the command cannot be classified deterministically, unavailable/absent according to coverage. Failed tests still qualify. |
 
 ## 4. Token and context source rules
+
+### Context-analysis-v2 extension
+
+`context-analysis-v2` is a separately versioned, immutable derived layer for
+request purpose and harness-context overhead. It retains all proxy-visible model
+inference requests and preserves discovery HTTP calls as diagnostics, but does
+not count discovery calls as model inference. It records the first real task
+request, auxiliary requests before it, task-relative context deltas, and exact
+request-structure references. Component token decomposition is unavailable
+unless it can be reconstructed with an exact pinned tokenizer/template; it is
+never estimated. See [CONTEXT_ANALYSIS.md](CONTEXT_ANALYSIS.md).
 
 Token values have one of these methods:
 

@@ -36,6 +36,12 @@ from agent_bench.metrics_storage import (
     store_metrics_artifact,
     verify_metrics_artifact,
 )
+from agent_bench.context_analysis import ContextAnalysisError, derive_context_analysis
+from agent_bench.context_storage import (
+    ContextAnalysisStorageError,
+    store_context_analysis_artifact,
+    verify_context_analysis_artifact,
+)
 from agent_bench.models import ExperimentDefinition, Identifier
 from agent_bench.opencode import (
     OpenCodeError,
@@ -43,6 +49,9 @@ from agent_bench.opencode import (
     verify_opencode_toolchain,
 )
 from agent_bench.opencode_run import execute_controlled_opencode_run
+from agent_bench.hermes import HermesError, inspect_hermes_toolchain, load_hermes_profile
+from agent_bench.hermes_run import execute_controlled_hermes_run
+from agent_bench.supervisor import SupervisorError, run_startup_diagnostic
 from agent_bench.pi import PiError, inspect_pi_toolchain, load_pi_profile
 from agent_bench.pi_run import execute_controlled_pi_run
 from agent_bench.preservation import (
@@ -77,6 +86,11 @@ metrics_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(metrics_app, name="metrics")
+context_app = typer.Typer(
+    help="Create or inspect immutable generic context-analysis-v2 artifacts.",
+    no_args_is_help=True,
+)
+app.add_typer(context_app, name="context")
 backend_app = typer.Typer(
     help="Inspect or explicitly probe the fixed benchmark-v1 llama.cpp backend.",
     no_args_is_help=True,
@@ -92,6 +106,11 @@ pi_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(pi_app, name="pi")
+hermes_app = typer.Typer(
+    help="Inspect or run the pinned M8 Hermes integration.",
+    no_args_is_help=True,
+)
+app.add_typer(hermes_app, name="hermes")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -236,6 +255,34 @@ def metrics_show(path: Path) -> None:
             sort_keys=True,
         )
     )
+
+
+@context_app.command("calculate")
+def context_calculate(source_artifact: Path, output_root: Path) -> None:
+    """Derive and seal generic request-purpose/context analysis."""
+    try:
+        analysis = derive_context_analysis(source_artifact)
+        stored = store_context_analysis_artifact(
+            source_artifact=source_artifact, output_root=output_root, analysis=analysis
+        )
+    except (ContextAnalysisError, ContextAnalysisStorageError, PreservationError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"run_id={analysis.run_id}\nfirst_task_request_index={analysis.first_task_request_index}\n"
+        f"context_analysis_artifact={stored}"
+    )
+
+
+@context_app.command("show")
+def context_show(path: Path) -> None:
+    """Print a validated context-analysis-v2 artifact."""
+    try:
+        analysis = verify_context_analysis_artifact(path)
+    except ContextAnalysisStorageError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(analysis.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True))
 
 
 @backend_app.command("validate")
@@ -529,6 +576,72 @@ def pi_run(experiment_path: Path, run_id: str, output_root: Path) -> None:
         raise typer.Exit(code=1)
     assert controlled.run is not None and controlled.metrics is not None
     typer.echo(f"run_id={controlled.run.run_manifest.run_id}\noutcome={controlled.run.run_manifest.observed_execution_outcome}\nartifact={controlled.run.artifact_path}\nmetrics_artifact={controlled.metrics.root}\ntermination={controlled.metrics.metrics.termination.termination_class}")
+
+
+@hermes_app.command("inspect")
+def hermes_inspect() -> None:
+    """Verify the benchmark-managed Hermes, Python, and Node toolchain."""
+    try:
+        profile = load_hermes_profile()
+        inspect_hermes_toolchain(profile.toolchain)
+    except HermesError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"profile_id={profile.profile_id}\n"
+        f"profile_digest={profile.definition_digest}\n"
+        f"config_sha256={profile.config_sha256}\n"
+        f"node={profile.toolchain.node_path}\n"
+        f"node_sha256={profile.toolchain.node_sha256}\n"
+        f"node_version={profile.toolchain.node_version}\n"
+        f"python={profile.toolchain.python_path}\n"
+        f"python_sha256={profile.toolchain.python_sha256}\n"
+        f"entrypoint={profile.toolchain.entrypoint_path}\n"
+        f"entrypoint_sha256={profile.toolchain.entrypoint_sha256}\n"
+        f"hermes_version={profile.toolchain.version_output}\n"
+        f"source_tree_sha256={profile.toolchain.source_tree_sha256}\n"
+        f"environment_tree_sha256={profile.toolchain.environment_tree_sha256}\n"
+        "pinned_identity_match=true"
+    )
+
+
+@hermes_app.command("supervisor-dry-run")
+def hermes_supervisor_dry_run(run_id: str, output_root: Path) -> None:
+    """Verify the early supervisor boundary without starting any process."""
+    try:
+        evidence = run_startup_diagnostic(
+            output_root=output_root,
+            run_id=run_id,
+            argv=("agent-bench", "hermes", "supervisor-dry-run", run_id),
+        )
+    except SupervisorError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"supervisor_evidence={evidence.root}\nstage=dry_startup_complete")
+
+
+@hermes_app.command("run")
+def hermes_run(experiment_path: Path, run_id: str, output_root: Path) -> None:
+    """Execute exactly one selected Hermes run with the fixed M5 backend."""
+    experiment = _load_or_exit(experiment_path)
+    run_definition = next((run for run in expand_experiment(experiment) if run.run_id == run_id), None)
+    if run_definition is None:
+        typer.echo(f"Error: run ID is not in the expanded experiment: {run_id}", err=True)
+        raise typer.Exit(code=1)
+    if run_definition.harness_id != "hermes" or run_definition.profile_id != "hermes-default-v1":
+        typer.echo("Error: M8 supports only Hermes profile hermes-default-v1", err=True)
+        raise typer.Exit(code=1)
+    prompt = next(item for item in experiment.prompts if item.prompt_id == run_definition.prompt_id)
+    try:
+        controlled = execute_controlled_hermes_run(run_definition=run_definition, prompt_content=prompt.content, output_root=output_root)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if controlled.failed_run is not None:
+        typer.echo(f"preflight=failed\nfailure_class={controlled.failed_run.manifest.failure_class}\nevidence={controlled.failed_run.root}", err=True)
+        raise typer.Exit(code=1)
+    assert controlled.run is not None and controlled.metrics is not None and controlled.context_analysis_path is not None
+    typer.echo(f"run_id={controlled.run.run_manifest.run_id}\noutcome={controlled.run.run_manifest.observed_execution_outcome}\nartifact={controlled.run.artifact_path}\nmetrics_artifact={controlled.metrics.root}\ncontext_analysis_artifact={controlled.context_analysis_path}\ntermination={controlled.metrics.metrics.termination.termination_class}")
 
 
 @app.command("fake-run")

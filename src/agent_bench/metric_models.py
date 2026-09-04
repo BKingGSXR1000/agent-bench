@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_bench.models import Identifier, Sha256, canonical_sha256
 
 METRICS_SCHEMA_VERSION: Literal["1.0.0"] = "1.0.0"
-METRIC_SPEC_VERSION: Literal["1.0.0"] = "1.0.0"
+METRIC_SPEC_VERSION: Literal["1.0.1"] = "1.0.1"
 
 Availability = Literal["available", "unavailable", "not_applicable"]
 MetricMethod = Literal[
@@ -29,6 +29,7 @@ UnavailableReason = Literal[
     "event_not_observed",
     "not_applicable",
     "ambiguous_evidence",
+    "native_execution_timestamp_not_exposed",
     "invalid_source",
     "zero_denominator",
 ]
@@ -241,9 +242,9 @@ class RunMetrics(MetricsModel):
     """Complete immutable deterministic measurements for one preserved run."""
 
     metrics_id: str = Field(min_length=1)
-    metric_spec_version: Literal["1.0.0"] = METRIC_SPEC_VERSION
+    metric_spec_version: Literal["1.0.0", "1.0.1"] = METRIC_SPEC_VERSION
     calculator_name: Literal["agent-bench-metrics"] = "agent-bench-metrics"
-    calculator_version: Literal["1.0.0"] = "1.0.0"
+    calculator_version: Literal["1.0.0", "1.0.1"] = "1.0.1"
     calculator_configuration_digest: Sha256
     run_id: Identifier
     input_identity: MetricsInputIdentity

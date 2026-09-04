@@ -43,12 +43,13 @@ from agent_bench.preservation import (
 from agent_bench.runner import NORMALIZED_EVENTS_PATH, RAW_EVENTS_PATH, RUN_MANIFEST_PATH, RunManifest
 
 METRICS_CONFIGURATION = {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "duration_aggregation": "sum_completed_correlated_intervals",
     "duplicate_arguments": "canonical-json-exact-v1",
     "path_normalization": "project-relative-posix-lexical-v1",
     "git_status": "porcelain-v1-no-rename-reclassification",
     "path_classifier": "agent-bench-path-classifier-v1",
+    "tool_timing": "explicit-execution-boundary-only-v1",
     "termination_precedence": [
         "precondition_failed",
         "preservation_failed",
@@ -219,12 +220,14 @@ def _calculate_timing(
         "manifest_exact",
         artifacts=(RUN_MANIFEST_PATH,),
     )
-    requests = [event for event in events if event.event_kind == "llm_request"]
-    responses = [event for event in events if event.event_kind == "llm_response"]
+    requests, responses = _model_exchange_events(events)
     llm_time = _interval_sum(
         requests, responses, "request_id", "seconds", complete_llm_capture
     )
-    if tool_integrity and complete_tool_capture:
+    exact_tool_timing = all(
+        _has_exact_tool_execution_timing(call) for call in tools
+    )
+    if tool_integrity and complete_tool_capture and exact_tool_timing:
         tool_time = _tool_interval_sum(tools, lambda call: True, complete_tool_capture)
         shell_time = _tool_interval_sum(
             tools,
@@ -233,14 +236,30 @@ def _calculate_timing(
             complete_tool_capture,
         )
     else:
-        reason = "invalid_source" if not tool_integrity else "capture_incomplete"
+        reason = (
+            "invalid_source"
+            if not tool_integrity
+            else (
+                "capture_incomplete"
+                if not complete_tool_capture
+                else "native_execution_timestamp_not_exposed"
+            )
+        )
         tool_time = _unavailable("seconds", reason)
         shell_time = _unavailable("seconds", reason)
+    exact_starts = [call.start for call in tools if _is_exact_execution_start(call.start)]
     edit_starts = [
         call.start for call in tools
-        if call.category in {"edit", "write"} and _tool_targets_worktree(call.start)
+        if (
+            call.category in {"edit", "write"}
+            and _tool_targets_worktree(call.start)
+            and _is_exact_execution_start(call.start)
+        )
     ]
-    test_starts = [call.start for call in tools if call.category == "test"]
+    test_starts = [
+        call.start for call in tools
+        if call.category == "test" and _is_exact_execution_start(call.start)
+    ]
     return TimingMetrics(
         wall_time_seconds=wall,
         llm_time_seconds=llm_time,
@@ -252,21 +271,60 @@ def _calculate_timing(
             else _unavailable("seconds", "capture_incomplete")
         ),
         time_to_first_tool_call_seconds=(
-            _first_elapsed([call.start for call in tools], "calls")
-            if tool_integrity and complete_tool_capture
-            else _unavailable("seconds", "invalid_source" if not tool_integrity else "capture_incomplete")
+            _first_elapsed(exact_starts, "calls")
+            if tool_integrity and complete_tool_capture and exact_starts
+            else _unavailable("seconds", "invalid_source" if not tool_integrity else ("capture_incomplete" if not complete_tool_capture else "native_execution_timestamp_not_exposed"))
         ),
         time_to_first_edit_seconds=(
             _first_elapsed(edit_starts, "calls")
-            if tool_integrity and complete_tool_capture
-            else _unavailable("seconds", "invalid_source" if not tool_integrity else "capture_incomplete")
+            if tool_integrity and complete_tool_capture and edit_starts
+            else _unavailable("seconds", "invalid_source" if not tool_integrity else ("capture_incomplete" if not complete_tool_capture else "native_execution_timestamp_not_exposed"))
         ),
         time_to_first_test_command_seconds=(
             _first_elapsed(test_starts, "calls")
-            if tool_integrity and complete_tool_capture
-            else _unavailable("seconds", "invalid_source" if not tool_integrity else "capture_incomplete")
+            if tool_integrity and complete_tool_capture and test_starts
+            else _unavailable("seconds", "invalid_source" if not tool_integrity else ("capture_incomplete" if not complete_tool_capture else "native_execution_timestamp_not_exposed"))
         ),
     )
+
+
+def _model_exchange_events(
+    events: tuple[NormalizedEvent, ...],
+) -> tuple[list[NormalizedEvent], list[NormalizedEvent]]:
+    """Return completion exchanges, excluding proxy metadata/discovery traffic.
+
+    Raw proxy capture deliberately retains every HTTP request.  Only POST
+    completion endpoints are model requests for timing, token, context, and
+    request-count metrics.  Events without HTTP endpoint metadata (for example
+    deterministic FakeHarness fixtures) remain accepted for backward-compatible
+    common-event handling.
+    """
+    requests: list[NormalizedEvent] = []
+    request_ids: set[str] = set()
+    for event in events:
+        if event.event_kind != "llm_request":
+            continue
+        endpoint = event.payload.get("endpoint")
+        method = event.payload.get("method")
+        if isinstance(endpoint, str) and endpoint:
+            if method != "POST" or not endpoint.rstrip("/").endswith(
+                ("/chat/completions", "/completions", "/responses")
+            ):
+                continue
+        requests.append(event)
+        request_id = event.payload.get("request_id")
+        if isinstance(request_id, str):
+            request_ids.add(request_id)
+    responses = [
+        event
+        for event in events
+        if event.event_kind == "llm_response"
+        and (
+            not isinstance(event.payload.get("request_id"), str)
+            or event.payload["request_id"] in request_ids
+        )
+    ]
+    return requests, responses
 
 
 def _calculate_tokens_and_context(
@@ -279,8 +337,7 @@ def _calculate_tokens_and_context(
 ) -> tuple[TokenMetrics, ContextMetrics]:
     if complete_compaction_capture is None:
         complete_compaction_capture = complete_llm_capture
-    requests = [event for event in events if event.event_kind == "llm_request"]
-    responses = [event for event in events if event.event_kind == "llm_response"]
+    requests, responses = _model_exchange_events(events)
     response_by_request: dict[str, NormalizedEvent] = {}
     response_identity_valid = True
     for response in responses:
@@ -524,7 +581,7 @@ def _calculate_behavior(
 ) -> BehaviorMetrics:
     if complete_tool_capture is None:
         complete_tool_capture = complete_llm_capture
-    requests = [event for event in events if event.event_kind == "llm_request"]
+    requests, responses = _model_exchange_events(events)
     request_ids = [event.payload.get("request_id") for event in requests]
     request_indices = [event.payload.get("request_index") for event in requests]
     requests_valid = (
@@ -538,7 +595,6 @@ def _calculate_behavior(
         if complete_llm_capture and requests_valid
         else _unavailable("requests", "capture_incomplete" if not complete_llm_capture else "invalid_source")
     )
-    responses = [event for event in events if event.event_kind == "llm_response"]
     response_ids = [event.payload.get("response_id") for event in responses]
     responses_valid = (
         all(isinstance(item, str) for item in response_ids)
@@ -957,6 +1013,30 @@ def _correlate_tools(events: tuple[NormalizedEvent, ...], diagnostics: list[str]
             outcome = "unknown"
         calls.append(_ToolCall(call_id, event, end, str(category), str(outcome)))
     return tuple(calls)
+
+
+def _is_exact_execution_start(event: NormalizedEvent) -> bool:
+    """Whether a tool-start timestamp explicitly denotes execution start.
+
+    Older generic fixtures predate the provenance field and retain their
+    established semantics.  Harness adapters added after timing-provenance-v1
+    must declare the field rather than relying on this compatibility default.
+    """
+    return event.payload.get("timing_semantics", "harness_tool_execution_start") == (
+        "harness_tool_execution_start"
+    )
+
+
+def _is_exact_execution_end(event: NormalizedEvent | None) -> bool:
+    if event is None:
+        return False
+    return event.payload.get("timing_semantics", "harness_tool_execution_end") == (
+        "harness_tool_execution_end"
+    )
+
+
+def _has_exact_tool_execution_timing(call: _ToolCall) -> bool:
+    return _is_exact_execution_start(call.start) and _is_exact_execution_end(call.end)
 
 
 def _tool_identity_valid(events: tuple[NormalizedEvent, ...]) -> bool:

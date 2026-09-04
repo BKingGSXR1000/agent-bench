@@ -1,0 +1,23 @@
+schema_version: 1.0.0
+profile_id: hermes-default-v1
+profile_version: 1.0.0
+toolchain_identity_file: ../../../toolchains/hermes/0.21.0/identity.json
+config_file: config.yaml
+config_sha256: 539cf56308428bee00a15529e0640c736f23409147ceb805ca54f05f4dcdd1be
+proxy_base_url: http://127.0.0.1:18081/v1
+provider_id: agent-bench
+model_id: qwen3.8-27b
+invocation:
+  output_mode: final_text_with_usage_json
+  non_interactive: true
+  prompt_delivery: argv_element_exact_utf8
+  approval_mode: upstream_oneshot_auto_bypass
+  toolsets: upstream_default
+  project_local_discovery: enabled
+deviations:
+  - "required endpoint/model compatibility: registers the fixed local OpenAI chat-completions provider and Qwen model."
+  - "required endpoint/model compatibility: enables Hermes's documented per-model reasoning_content replay for the Qwen local endpoint."
+  - "required non-interactive execution: uses upstream --oneshot and --usage-file; upstream oneshot auto-bypasses approvals."
+  - "required isolation: sets a fresh HERMES_HOME and all HOME/XDG roots; no personal state is inherited."
+  - "observability-only: preserves the upstream oneshot usage JSON and isolated native SQLite session evidence."
+  - "behaviorally neutral defensive isolation: provides only an explicit local placeholder credential and no ambient environment."

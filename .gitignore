@@ -12,6 +12,11 @@ toolchains/*/*/node_modules/
 toolchains/node/*/bin/node
 # OpenCode is likewise a locally provisioned benchmark-toolchain payload.
 toolchains/opencode/*/bin/opencode
+# Hermes and its CPython runtime are locally materialized benchmark-toolchain
+# payloads. Their exact identities are tracked, but the payloads are not.
+toolchains/hermes/*/source/
+toolchains/hermes/*/venv/
+toolchains/python/*/
 
 runs/
 artifacts/

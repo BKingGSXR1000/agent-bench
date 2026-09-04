@@ -11,7 +11,7 @@ from agent_bench.events import DerivedEvent, RawEvent, normalize_raw_events
 from agent_bench.models import JsonMapping, canonical_sha256
 
 OPENCODE_NORMALIZER_NAME = "agent-bench-opencode"
-OPENCODE_NORMALIZER_VERSION = "1.0.1"
+OPENCODE_NORMALIZER_VERSION = "1.0.2"
 
 _COMMON_TYPES = frozenset(
     {
@@ -168,6 +168,7 @@ class _OpenCodeTransformer:
             "arguments": arguments,
             "turn_id": part.get("messageID"),
             "session_id": native.get("sessionID"),
+            "timing_semantics": "harness_tool_execution_start",
         }
         if path is not None:
             start_payload["path"] = path
@@ -203,6 +204,7 @@ class _OpenCodeTransformer:
         end_payload: JsonMapping = {
             "tool_call_id": call_id,
             "outcome": outcome,
+            "timing_semantics": "harness_tool_execution_end",
         }
         output = state.get("output")
         if isinstance(output, str):

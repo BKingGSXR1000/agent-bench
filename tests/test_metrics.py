@@ -17,6 +17,7 @@ from agent_bench.metrics import (
     _correlate_tools,
     _divide_metrics,
     _interval_sum,
+    _model_exchange_events,
     _token_metric,
     _tool_identity_valid,
     _available,
@@ -111,6 +112,17 @@ def test_calculates_behavior_duplicates_repeated_reads_and_formulas(metrics_run:
     assert metrics.derived.tokens_per_edit.value == 560.0
     assert metrics.derived.failed_tool_call_rate.value == 0.0
     assert metrics.derived.reasoning_to_output_ratio.value == 0.4
+
+
+def test_model_exchange_filter_excludes_proxy_metadata_requests(metrics_run: object) -> None:
+    events = load_normalized_events(metrics_run.normalized_event_path)  # type: ignore[attr-defined]
+    request = next(event for event in events if event.event_kind == 'llm_request')
+    response = next(event for event in events if event.event_kind == 'llm_response')
+    discovery = request.model_copy(update={'event_id': 'metadata-request', 'payload': {**request.payload, 'request_id': 'metadata', 'endpoint': '/v1/models', 'method': 'GET'}})
+    discovery_response = response.model_copy(update={'event_id': 'metadata-response', 'payload': {**response.payload, 'request_id': 'metadata'}})
+    requests, responses = _model_exchange_events(tuple(events) + (discovery, discovery_response))
+    assert discovery not in requests
+    assert discovery_response not in responses
 
 
 def test_git_metrics_include_preserved_untracked_and_deleted_files(metrics_run: object) -> None:
@@ -473,5 +485,5 @@ def test_metrics_cli_calculate_and_show(metrics_run: object, tmp_path: Path) -> 
 
     show = cli.invoke(app, ["metrics", "show", str(metrics_root)])
     assert show.exit_code == 0, show.output
-    assert '"metric_spec_version": "1.0.0"' in show.output
+    assert '"metric_spec_version": "1.0.1"' in show.output
     assert '"termination_class": "success"' in show.output
