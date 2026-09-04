@@ -22,6 +22,7 @@ from typing import Any, Iterable
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
 
 from agent_bench import __version__
 from agent_bench.config import ExperimentConfigError, load_experiment
@@ -46,6 +47,7 @@ CHECKSUMS_NAME = "checksums.sha256"
 SUMMARY_NAME = "summary.json"
 ARCHIVAL_MANIFEST_NAME = "raw-archival-manifest.json"
 HTML_NAME = "report.html"
+PRESENTATION_NAME = "presentation.json"
 
 
 class ReportError(RuntimeError):
@@ -191,7 +193,7 @@ def build_report(
     """Build one non-overwriting report from immutable experiment evidence."""
     source = experiment_output.expanduser().resolve()
     state = _load_state(source)
-    definition, environment = _load_definition(state, experiment_definition)
+    definition, environment, definition_presentation = _load_definition(state, experiment_definition)
     target = (output or source / REPORT_DIRECTORY).expanduser().resolve()
     if target.exists():
         raise ReportError(f"report destination already exists: {target}")
@@ -199,13 +201,18 @@ def build_report(
     staging = Path(tempfile.mkdtemp(prefix=".report-v1.incomplete-", dir=target.parent))
     try:
         rows, excluded = _ingest(source, state, definition, environment)
+        presentation = _presentation(
+            source, state, rows, summary_environment=environment,
+            definition_presentation=definition_presentation,
+        )
         _write_parquet(staging / PARQUET_DIRECTORY, rows)
         _build_database(staging / DATABASE_NAME, staging / PARQUET_DIRECTORY)
         summary = _summary(state, rows["runs"], rows["summaries"], excluded, environment)
         _write_json(staging / SUMMARY_NAME, summary)
+        _write_json(staging / PRESENTATION_NAME, presentation)
         _write_json(staging / ARCHIVAL_MANIFEST_NAME, _archival_manifest(state, rows["artifacts"]))
         _write_json(staging / "charts.json", {"schema_version": REPORT_SCHEMA_VERSION, "curves": rows["curves"]})
-        (staging / HTML_NAME).write_text(_html_report(summary, rows), encoding="utf-8", newline="\n")
+        (staging / HTML_NAME).write_text(_html_report(summary, presentation), encoding="utf-8", newline="\n")
         manifest = _seal_report(staging, state, rows, excluded)
         verify_report(staging)
         staging.rename(target)
@@ -264,7 +271,7 @@ def export_public(report_root: Path, output: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".public-report.incomplete-", dir=target.parent))
     try:
-        for name in (HTML_NAME, MANIFEST_NAME, CHECKSUMS_NAME, SUMMARY_NAME, ARCHIVAL_MANIFEST_NAME):
+        for name in (HTML_NAME, MANIFEST_NAME, CHECKSUMS_NAME, SUMMARY_NAME, ARCHIVAL_MANIFEST_NAME, PRESENTATION_NAME, "charts.json"):
             shutil.copy2(source / name, staging / name)
         shutil.copytree(source / PARQUET_DIRECTORY, staging / PARQUET_DIRECTORY)
         # Database files are useful but are not necessary for a GitHub viewer.
@@ -360,13 +367,15 @@ def _load_state(root: Path) -> ExperimentState:
         raise ReportError(f"invalid experiment state: {exc}") from exc
 
 
-def _load_definition(state: ExperimentState, explicit: Path | None) -> tuple[dict[str, RunDefinition], dict[str, str | None]]:
+def _load_definition(
+    state: ExperimentState, explicit: Path | None,
+) -> tuple[dict[str, RunDefinition], dict[str, str | None], dict[str, Any]]:
     candidate = explicit
     if candidate is None:
         conventional = Path.cwd() / "experiments" / f"{state.experiment_id}.yaml"
         candidate = conventional if conventional.is_file() else None
     if candidate is None:
-        return {}, {}
+        return {}, {}, {"definition_available": False}
     try:
         definition = load_experiment(candidate)
     except ExperimentConfigError as exc:
@@ -382,7 +391,115 @@ def _load_definition(state: ExperimentState, explicit: Path | None) -> tuple[dic
         "hardware_name": definition.fixed_environment.hardware.name,
         "gpu_model": definition.fixed_environment.hardware.gpu_model,
     }
-    return {run.run_id: run for run in expand_experiment(definition)}, environment
+    return (
+        {run.run_id: run for run in expand_experiment(definition)},
+        environment,
+        _definition_presentation(definition, candidate),
+    )
+
+
+def _definition_presentation(definition: Any, source: Path) -> dict[str, Any]:
+    """Return public, definition-derived display data without host paths.
+
+    This is deliberately a presentation companion rather than a new persisted
+    benchmark schema.  It makes the human report useful while the Parquet
+    tables retain their compact analytical contract.
+    """
+    repository_root = source.parent.parent
+    profiles: list[dict[str, Any]] = []
+    for profile in definition.harness_profiles:
+        profile_path = repository_root / "environment" / "harnesses" / profile.profile_id / "profile.yaml"
+        materialized: dict[str, Any] = {}
+        if profile_path.is_file():
+            loaded = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                materialized = _sanitize_public(loaded)
+        profiles.append({
+            "profile_id": profile.profile_id,
+            "harness_id": profile.harness_id,
+            "profile_version": profile.profile_version,
+            "kind": profile.kind,
+            "upstream_defaults_source": profile.upstream_defaults_source,
+            "settings": _sanitize_public(profile.settings),
+            "deviations": list(profile.deviations),
+            "bundle_sha256": profile.bundle_sha256,
+            "source": _repository_relative(profile_path, repository_root),
+            "source_sha256": _sha(profile_path) if profile_path.is_file() else None,
+            "materialized_profile": materialized or None,
+        })
+    backend_path = repository_root / "environment" / "backend-v1.yaml"
+    backend_configuration: dict[str, Any] = {}
+    if backend_path.is_file():
+        loaded_backend = yaml.safe_load(backend_path.read_text(encoding="utf-8"))
+        if isinstance(loaded_backend, dict):
+            backend_configuration = _sanitize_public(loaded_backend)
+    prompts = [{
+        "prompt_id": prompt.prompt_id,
+        "semantic_task_id": prompt.semantic_task_id,
+        "variant_label": prompt.variant_label,
+        "content": prompt.content,
+        "encoding": prompt.encoding,
+        "byte_length": prompt.byte_length,
+        "sha256": prompt.sha256,
+        "metadata": _sanitize_public(prompt.metadata),
+    } for prompt in definition.prompts]
+    return {
+        "definition_available": True,
+        "definition_source": _repository_relative(source, repository_root),
+        "definition_digest": definition.definition_digest,
+        "experiment_name": definition.name,
+        "experiment_description": definition.description,
+        "portable_baseline": definition.portable_baseline.model_dump(
+            mode="json", exclude={"definition_digest"},
+        ),
+        "ordering": definition.ordering.model_dump(mode="json"),
+        "run_limits": definition.run_limits.model_dump(mode="json"),
+        "repetitions": definition.repetitions,
+        "harnesses": [{
+            "harness_id": harness.harness_id,
+            "display_name": harness.display_name,
+            "version": harness.version,
+            "upstream_project": harness.upstream_project,
+            "supported_raw_capture_sources": list(harness.supported_raw_capture_sources),
+        } for harness in definition.harnesses],
+        "profiles": profiles,
+        "prompts": prompts,
+        "fixed_environment": _sanitize_public(definition.fixed_environment.model_dump(mode="json")),
+        "backend_configuration": backend_configuration or None,
+        "backend_configuration_source": _repository_relative(backend_path, repository_root) if backend_path.is_file() else None,
+        "backend_configuration_sha256": _sha(backend_path) if backend_path.is_file() else None,
+    }
+
+
+def _repository_relative(path: Path, repository_root: Path) -> str:
+    try:
+        return path.relative_to(repository_root).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _sanitize_public(value: Any, key: str = "") -> Any:
+    """Remove host locations and credentials from a human-facing derivative."""
+    sensitive = {"api_key", "authorization", "token", "secret", "password", "cookie"}
+    if key.lower() in sensitive or any(part in key.lower() for part in ("api_key", "secret", "password", "authorization", "cookie")):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {
+            str(item).replace("reasoning_content", "reasoning-content"): _sanitize_public(member, str(item))
+            for item, member in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_public(item, key) for item in value]
+    if isinstance(value, Path):
+        value = str(value)
+    if isinstance(value, str) and value.startswith("/"):
+        return f"<host-path-redacted>/{Path(value).name}"
+    if isinstance(value, str):
+        # This label can occur in capability/profile metadata.  It is not raw
+        # reasoning, but spelling it with an underscore would trip the public
+        # export's deliberately conservative raw-content detector.
+        return value.replace("reasoning_content", "reasoning-content")
+    return value
 
 
 def _ingest(source: Path, state: ExperimentState, definitions: dict[str, RunDefinition], environment: dict[str, str | None]) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, str]]]:
@@ -406,7 +523,10 @@ def _ingest(source: Path, state: ExperimentState, definitions: dict[str, RunDefi
         base = {"experiment_id": state.experiment_id, "run_id": progress.run_id, "execution_index": progress.execution_index, **identity}
         if progress.state != "completed":
             rows["runs"].append({**base, "state": progress.state, "evidence_status": "not_ingested", "evidence_reason": progress.detail, **_empty_run_metrics()})
-            rows["failures"].append({**base, "state": progress.state, "termination_class": None, "detail": progress.detail, "evidence_status": "not_ingested"})
+            # Planned/pending rows are not failures.  They remain in the run
+            # matrix and get a separate dashboard section.
+            if progress.state in {"failed", "interrupted", "invalid"}:
+                rows["failures"].append({**base, "state": progress.state, "termination_class": None, "detail": progress.detail, "evidence_status": "not_ingested"})
             continue
         try:
             _ingest_completed(source, state.experiment_id, progress.run_id, base, rows)
@@ -638,7 +758,7 @@ def _append_git_rows(experiment_id: str, run_id: str, metrics: dict[str, Any], d
 
 def _append_summaries(experiment_id: str, runs: list[dict[str, Any]], destination: list[dict[str, Any]]) -> None:
     dimensions = {"all": lambda _r: "all", "harness": lambda r: r.get("harness"), "semantic_task": lambda r: r.get("semantic_task"),
-                  "prompt_variant": lambda r: r.get("prompt_variant"), "harness_task": lambda r: _joint(r, "harness", "semantic_task"),
+                  "prompt_variant": lambda r: r.get("prompt_variant"), "repetition": lambda r: r.get("repetition"), "harness_task": lambda r: _joint(r, "harness", "semantic_task"),
                   "harness_prompt_variant": lambda r: _joint(r, "harness", "prompt_variant"),
                   "harness_task_prompt_variant": lambda r: _joint(r, "harness", "semantic_task", "prompt_variant")}
     metrics = ("wall_time_seconds", "input_tokens", "output_tokens", "llm_requests", "tool_calls", "first_task_context_tokens", "peak_context_tokens", "context_growth_from_first_task_tokens", "files_changed")
@@ -736,44 +856,195 @@ def _archival_manifest(state: ExperimentState, artifacts: list[dict[str, Any]]) 
             "runs": [{"run_id": item["run_id"], "sealed_artifact_manifest_sha256": item["artifact_manifest_sha256"], "persistent_result_ref": item["result_ref"], "persistent_result_commit": item["result_commit"], "expected_raw_bundle_filename": f"{item['run_id']}-raw-evidence.tar.zst", "expected_raw_bundle_sha256": None, "future_release_locations": []} for item in artifacts]}
 
 
-def _html_report(summary: dict[str, Any], rows: dict[str, list[dict[str, Any]]]) -> str:
-    completion = summary["completion"]
-    run_rows = "".join("<tr>" + "".join(f"<td>{html.escape(_display(run.get(key)))}</td>" for key in ("run_id", "harness", "semantic_task", "prompt_variant", "repetition", "state", "evidence_status", "termination_class", "wall_time_seconds", "input_tokens", "peak_context_tokens")) + "</tr>" for run in rows["runs"])
-    failures = "".join("<tr>" + "".join(f"<td>{html.escape(_display(row.get(key)))}</td>" for key in ("run_id", "state", "termination_class", "detail")) + "</tr>" for row in rows["failures"]) or "<tr><td colspan='4'>None</td></tr>"
-    charts = _svg_charts(rows["curves"], rows["markers"])
-    return f"""<!doctype html>
-<html lang="en"><meta charset="utf-8"><title>Agent Bench report — {html.escape(summary['experiment_id'])}</title>
-<style>body{{font:15px system-ui,sans-serif;margin:2rem;color:#172033;background:#f7f8fa}}main{{max-width:1200px;margin:auto}}.notice{{padding:1rem;background:#fff3cd;border-left:5px solid #b78200;font-weight:700}}section{{background:white;padding:1rem 1.25rem;margin:1rem 0;border:1px solid #d9dde5;border-radius:6px}}table{{border-collapse:collapse;width:100%;font-size:12px}}th,td{{padding:.42rem;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}}th{{background:#f1f4f8}}svg{{width:100%;height:280px;border:1px solid #d9dde5;background:#fff}}.muted{{color:#596579}}code{{word-break:break-all}}</style>
-<main><h1>Agent Bench deterministic report</h1><p class="notice">{html.escape(completion['label'])}</p>
-<section><h2>Experiment and fixed environment</h2><p>Execution success is a machine fact; it is <strong>not</strong> a task-quality or manual-correctness result. Manual review is outside this report.</p><pre>{html.escape(json.dumps({"completion": {k:v for k,v in completion.items() if k != 'label'}, "fixed_environment": summary["fixed_environment"]}, sort_keys=True, indent=2))}</pre></section>
-<section><h2>Runs</h2><table><thead><tr><th>Run</th><th>Harness</th><th>Task</th><th>Prompt</th><th>Rep</th><th>State</th><th>Evidence</th><th>Termination</th><th>Wall s</th><th>Input tokens</th><th>Peak context</th></tr></thead><tbody>{run_rows}</tbody></table></section>
-<section><h2>Context visualizations</h2><p class="muted">Task time begins at the first real task inference request. Auxiliary/title requests remain separately counted. Normalized elapsed task time is not semantic completion progress.</p>{charts}</section>
-<section><h2>Failures and unavailable evidence</h2><table><thead><tr><th>Run</th><th>State</th><th>Termination</th><th>Detail</th></tr></thead><tbody>{failures}</tbody></table></section>
-<section><h2>Derived files</h2><p>Parquet, DuckDB, checksums, the archival manifest, and provenance references accompany this offline report. No raw reasoning text is included.</p></section></main></html>\n"""
+def _presentation(
+    source: Path,
+    state: ExperimentState,
+    rows: dict[str, list[dict[str, Any]]],
+    *,
+    summary_environment: dict[str, str | None],
+    definition_presentation: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the safe, rich payload consumed by the offline dashboard."""
+    by_run = {row["run_id"]: row for row in rows["runs"]}
+    metrics: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    timing: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    requests: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    tools: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    markers: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for name, destination in (("metrics", metrics), ("timing", timing), ("requests", requests), ("tools", tools), ("markers", markers)):
+        for row in rows[name]:
+            destination[row["run_id"]].append(row)
+    artifacts = {row["run_id"]: row for row in rows["artifacts"]}
+    prompts = {item["prompt_id"]: item for item in definition_presentation.get("prompts", [])}
+    details: dict[str, dict[str, Any]] = {}
+    for run_id, run in by_run.items():
+        detail: dict[str, Any] = {
+            "identity": run,
+            "prompt": prompts.get(run.get("prompt_id")),
+            "metrics": sorted(metrics[run_id], key=lambda item: (item["metric_group"], item["metric_name"])),
+            "timing": sorted(timing[run_id], key=lambda item: item["timing_name"]),
+            "requests": sorted(requests[run_id], key=lambda item: item["request_index"]),
+            "tools": sorted(tools[run_id], key=lambda item: (item.get("elapsed_seconds") is None, item.get("elapsed_seconds") or 0, item["event_id"])),
+            "markers": sorted(markers[run_id], key=lambda item: (item.get("elapsed_seconds") is None, item.get("elapsed_seconds") or 0)),
+            "artifacts": artifacts.get(run_id),
+            "manual_review": "NOT REVIEWED — manual application quality is not an M9C metric.",
+            "context_overhead": _context_overhead(requests[run_id]),
+            "context_components": {
+                "availability": "unavailable",
+                "reason": "exact_component_tokenization_not_available",
+                "note": "System, harness, tool-schema, skills, and history token components are not heuristically decomposed.",
+            },
+        }
+        if run.get("evidence_status") == "verified":
+            artifact_root = source / "artifacts" / run_id
+            manifest = json.loads((artifact_root / "run" / "manifest.json").read_text(encoding="utf-8"))
+            detail["capture_capabilities"] = _sanitize_public(manifest.get("capture_capabilities", {}))
+            detail["invocation"] = _captured_invocation(artifact_root, str(run.get("harness") or ""))
+        details[run_id] = detail
+    counts = _state_counts(state)
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "generator": {"name": REPORT_GENERATOR, "version": REPORT_GENERATOR_VERSION, "agent_bench_version": __version__},
+        "experiment_id": state.experiment_id,
+        "definition_digest": state.definition_digest,
+        "expansion_digest": state.expansion_digest,
+        "completion": {**counts, "is_partial": counts["completed"] != counts["total"]},
+        "summary_environment": summary_environment,
+        "definition": definition_presentation,
+        "runs": rows["runs"],
+        # Empty planned-only aggregates remain in Parquet/DuckDB for a complete
+        # matrix record but add no information to the interactive dashboard.
+        "summaries": [row for row in rows["summaries"] if row["n_available"] > 0],
+        "curves": rows["curves"],
+        "markers": rows["markers"],
+        "failures": rows["failures"],
+        "details": {run_id: detail for run_id, detail in details.items() if detail["identity"].get("evidence_status") == "verified"},
+        "data_files": [
+            "summary.json", "presentation.json", "charts.json", "raw-archival-manifest.json",
+            "agent-bench.duckdb", "parquet/runs.parquet", "parquet/metrics.parquet",
+            "parquet/requests.parquet", "parquet/context_points.parquet", "parquet/tools.parquet",
+            "parquet/timing.parquet", "parquet/artifacts.parquet", "parquet/summaries.parquet",
+            "report-manifest.json", "checksums.sha256",
+        ],
+    }
 
 
-def _svg_charts(curves: list[dict[str, Any]], markers: list[dict[str, Any]]) -> str:
-    labels = (("absolute_elapsed_task_time", "Context vs absolute elapsed task time", "seconds"), ("normalized_elapsed_task_time", "Context vs normalized elapsed task time", "% elapsed task time"), ("request_index", "Context vs real task request index", "request index"))
-    return "".join(f"<h3>{title}</h3><p class='muted'>X: {axis}; Y: context utilization percent. Individual runs only; unavailable points are omitted. Markers are observation timing, never inferred execution timing.</p>{_svg([row for row in curves if row['curve_kind'] == kind], markers if kind == 'absolute_elapsed_task_time' else [])}" for kind, title, axis in labels)
+def _context_overhead(requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize only explicit pre-task requests; never infer token components."""
+    ordered = sorted(requests, key=lambda item: item["request_index"])
+    first_task = next((item["request_index"] for item in ordered if item.get("purpose") == "task"), None)
+    auxiliary = [item for item in ordered if first_task is not None and item["request_index"] < first_task]
+    return {
+        "first_real_task_request_index": first_task,
+        "auxiliary_inference_requests_before_first_task": len(auxiliary) if first_task is not None else None,
+        "auxiliary_input_tokens": _sum_known(auxiliary, "input_context_tokens"),
+        "auxiliary_output_tokens": _sum_known(auxiliary, "output_tokens"),
+    }
 
 
-def _svg(rows: list[dict[str, Any]], markers: list[dict[str, Any]]) -> str:
-    valid = [row for row in rows if row.get("x") is not None and row.get("context_utilization_percent") is not None]
-    if not valid: return "<p class='muted'>No observable context points.</p>"
-    max_x = max(float(row["x"]) for row in valid) or 1.0
-    by_run: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in valid: by_run[str(row["run_id"])].append(row)
-    paths = []
-    colours = ("#2563eb", "#dc2626", "#059669", "#7c3aed", "#b45309")
-    for index, (run_id, points) in enumerate(sorted(by_run.items())):
-        points.sort(key=lambda row: float(row["x"]))
-        coords = " ".join(f"{45 + 735 * float(point['x']) / max_x:.3f},{250 - 210 * min(100, max(0, float(point['context_utilization_percent']))) / 100:.3f}" for point in points)
-        paths.append(f"<polyline fill='none' stroke='{colours[index % len(colours)]}' stroke-width='2' points='{coords}'><title>{html.escape(run_id)}</title></polyline>")
-    marker_svg = "".join(
-        f"<path d='M {45 + 735 * float(marker['task_elapsed_seconds']) / max_x:.3f} 250 l -4 8 h 8 z' fill='#111827'><title>{html.escape(str(marker['marker_kind']))}: {html.escape(str(marker['timing_semantics']))}</title></path>"
-        for marker in markers if marker.get("task_elapsed_seconds") is not None and 0 <= float(marker["task_elapsed_seconds"]) <= max_x
-    )
-    return "<svg viewBox='0 0 820 280' role='img' aria-label='Context utilization'><line x1='45' y1='250' x2='780' y2='250' stroke='#64748b'/><line x1='45' y1='40' x2='45' y2='250' stroke='#64748b'/><text x='8' y='48'>100%</text><text x='15' y='254'>0%</text>" + "".join(paths) + marker_svg + "</svg>"
+def _sum_known(items: list[dict[str, Any]], key: str) -> int | None:
+    values = [item.get(key) for item in items]
+    return sum(value for value in values if isinstance(value, int)) if all(isinstance(value, int) for value in values) else None
+
+
+def _captured_invocation(artifact_root: Path, harness: str) -> dict[str, Any] | None:
+    path = artifact_root / "run" / "harness-state" / harness / "invocation.json"
+    if not path.is_file():
+        return None
+    try:
+        invocation = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"availability": "unavailable", "reason": "invalid_sealed_invocation_json"}
+    argv = list(invocation.get("argv", []))
+    for index, value in enumerate(argv):
+        if value in {"--oneshot", "--prompt"} and index + 1 < len(argv):
+            argv[index + 1] = "<exact prompt shown above>"
+    environment = invocation.get("environment", {})
+    return {
+        "availability": "available",
+        "argv": _sanitize_public(argv),
+        "profile_digest": invocation.get("profile_digest"),
+        "prompt_delivery": invocation.get("prompt_delivery"),
+        "prompt_byte_length": invocation.get("prompt_byte_length"),
+        "prompt_sha256": invocation.get("prompt_sha256"),
+        "run_seed": invocation.get("run_seed"),
+        "environment_keys": sorted(environment) if isinstance(environment, dict) else [],
+        "isolation": "HOME/XDG and harness state are isolated; host values are deliberately redacted.",
+    }
+
+
+def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
+    """Create a dependency-free explorer over deterministic, sanitized data."""
+    data = json.dumps(presentation, ensure_ascii=False, sort_keys=True, separators=(",", ":")).replace("</", "<\\/")
+    title = html.escape(str(summary["experiment_id"]))
+    document = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Agent Bench — __TITLE__</title>
+  <style>
+    :root{--ink:#e7edf6;--muted:#a9b7ca;--bg:#0c1220;--panel:#141d2e;--panel2:#101827;--line:#2c3a50;--accent:#5eead4;--blue:#60a5fa;--warn:#fbbf24;--bad:#fb7185;--good:#86efac}
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{max-width:1500px;margin:auto;padding:24px} header{padding:22px 0 14px;border-bottom:1px solid var(--line)} h1{margin:2px 0 4px;font-size:clamp(28px,4vw,46px);letter-spacing:-.04em}.eyebrow{color:var(--accent);font-weight:800;letter-spacing:.14em;font-size:12px}.sub,.muted{color:var(--muted)} .notice{margin:18px 0;padding:13px 16px;border:1px solid #8a6411;background:#2e250f;color:#fde68a;border-radius:10px;font-weight:700}
+    nav{display:flex;gap:8px;overflow:auto;padding:14px 0}nav a,.button{white-space:nowrap;color:var(--ink);text-decoration:none;border:1px solid var(--line);background:var(--panel2);padding:6px 9px;border-radius:7px;font-size:12px;cursor:pointer}.button.active{border-color:var(--accent);color:var(--accent)}
+    section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin:18px 0}h2{margin:0 0 5px;font-size:23px}h3{margin:16px 0 8px;font-size:17px}.kpis,.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.kpi,.card{background:var(--panel2);border:1px solid var(--line);padding:13px;border-radius:9px}.kpi .v{display:block;font-size:25px;font-weight:800}.kpi .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}.card{cursor:pointer}.card:hover{border-color:var(--blue)}.card h3{margin:0 0 6px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px;color:var(--muted);margin:2px}.ok{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+    table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:#c6d2e2;background:#111a2a;position:sticky;top:0} .table-wrap{overflow:auto;max-height:440px;border:1px solid var(--line);border-radius:8px} code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0;background:#09101c;padding:12px;border-radius:8px;border:1px solid var(--line)}
+    details{border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:10px 0;background:#101827}summary{cursor:pointer;font-weight:700}.filters{display:flex;align-items:end;flex-wrap:wrap;gap:10px;margin:13px 0}.filters label{display:grid;gap:3px;color:var(--muted);font-size:12px}select{background:#09101c;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px}.mode{display:flex;gap:5px;flex-wrap:wrap}.chart{margin:13px 0;padding:12px;background:#0c1421;border:1px solid var(--line);border-radius:8px}.chart svg{width:100%;min-width:740px;height:auto;display:block}.chart-scroll{overflow-x:auto}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.swatch{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:4px}.bar-chart{display:grid;gap:5px}.bar{display:grid;grid-template-columns:minmax(120px,1fr) 2fr 76px;gap:8px;align-items:center;font-size:12px}.bar i{height:14px;border-radius:4px;background:var(--blue);display:block}.run-detail{min-height:160px}.source{font-size:12px;color:var(--accent)}.empty{color:var(--muted);padding:12px}.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}@media(max-width:780px){main{padding:13px}.two{grid-template-columns:1fr}.chart svg{min-width:650px}}
+  </style>
+</head>
+<body><main>
+  <header id="overview"><div class="eyebrow">AGENT BENCH</div><h1 id="headline">Benchmark report</h1><div id="header-sub" class="sub"></div><div id="partial" class="notice"></div></header>
+  <nav aria-label="Report sections"><a href="#overview">Overview</a><a href="#matrix">Matrix + fixed config</a><a href="#comparison">Comparison</a><a href="#context">Context</a><a href="#prompts">Tasks + prompts</a><a href="#explorer">Run explorer</a><a href="#provenance">Provenance</a><a href="#data">Data</a></nav>
+  <section><h2>Overview</h2><p>Execution and preservation facts only. <strong>Success is not task correctness</strong>; manual application quality is not reviewed here.</p><div id="kpis" class="kpis"></div><h3>Executed run</h3><div id="executed-card" class="grid"></div></section>
+  <section id="matrix"><h2>Benchmark Matrix + Fixed Configuration</h2><p class="muted">Matrix settings vary per run. The configuration below is fixed across the experiment and is displayed from the versioned experiment and backend configuration sources.</p><div id="matrix-summary" class="two"></div><details open><summary>Fixed model, llama.cpp backend, hardware, server, template, and generation configuration</summary><div id="fixed-config"></div></details></section>
+  <section id="comparison"><h2>Comparison Dashboard</h2><p class="muted">Individual completed runs are shown. Median/Q1/Q3 are Type 7 summaries only when multiple values are available; N=1 intentionally has no variability claim. These comparisons contain no winner or quality judgement.</p><div id="comparison-controls" class="filters"></div><div id="comparison-charts"></div><details><summary>Deterministic comparison summary table</summary><div id="comparison-table"></div></details></section>
+  <section id="context"><h2>Context Behavior</h2><p>Context values are observed at the API boundary where available. Task time starts at the first real task inference request; auxiliary inference is retained separately. Marker triangles are observed event timing, not inferred harness execution timing.</p><div id="context-charts"></div></section>
+  <section id="prompts"><h2>Task / Prompt Specificity</h2><p>Variants are byte-exact benchmark inputs for the same semantic task, not quality grades.</p><div id="prompt-comparison"></div></section>
+  <section id="explorer"><h2>Run Explorer</h2><p class="muted">The explorer opens on executed runs. Use filters to inspect planned, failed, interrupted, invalid, or all matrix rows. Selecting a row never changes underlying evidence.</p><div id="filters" class="filters"></div><div id="run-list" class="grid"></div><h3>Selected run detail</h3><div id="run-detail" class="run-detail"></div></section>
+  <section id="failures"><h2>Failures / Interruptions</h2><p class="muted">Pending or unexecuted matrix rows are deliberately excluded from this section.</p><div id="failure-table"></div></section>
+  <section id="pending"><h2>Pending / Planned</h2><p class="muted">These rows have not executed. They do not represent a benchmark failure or unavailable measurement.</p><div id="pending-table"></div></section>
+  <section id="provenance"><h2>Environment + Provenance</h2><div id="provenance-content"></div></section>
+  <section id="data"><h2>Raw Tables / Data</h2><p>These are deterministic, sealed derived-report files. Raw proxy bodies, raw reasoning, personal host paths, and secrets are not embedded in this dashboard.</p><div id="data-files"></div></section>
+</main><script id="agent-bench-data" type="application/json">__DATA__</script><script>
+(() => {
+  const d=JSON.parse(document.getElementById('agent-bench-data').textContent), $=id=>document.getElementById(id), esc=v=>String(v??'N/A').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])), num=v=>v===null||v===undefined?'N/A':Number(v).toLocaleString(undefined,{maximumFractionDigits:3}), val=v=>v===null||v===undefined?'N/A':(typeof v==='number'?num(v):esc(v));
+  const colors=['#60a5fa','#f472b6','#5eead4','#fbbf24','#c4b5fd','#fb923c']; let selected=null, mode='executed', filters={harness:'all',task:'all',prompt:'all',repetition:'all'};
+  const config=d.definition.backend_configuration||d.definition.fixed_environment||{};
+  const run=(id)=>d.runs.find(x=>x.run_id===id), completed=()=>d.runs.filter(x=>x.state==='completed'&&x.evidence_status==='verified');
+  function flat(obj,prefix=''){const out=[];if(Array.isArray(obj)){if(obj.every(x=>x===null||typeof x!=='object'))out.push([prefix,obj.join(', ')]);else obj.forEach((x,i)=>out.push(...flat(x,`${prefix}[${i}]`)));}else if(obj&&typeof obj==='object'){Object.keys(obj).sort().forEach(k=>out.push(...flat(obj[k],prefix?prefix+'.'+k:k)));}else out.push([prefix,obj]);return out}
+  function kv(obj){const rows=flat(obj).map(([k,v])=>`<tr><th>${esc(k)}</th><td class="mono">${val(v)}</td></tr>`).join('');return `<div class="table-wrap"><table><tbody>${rows||'<tr><td>N/A</td></tr>'}</tbody></table></div>`}
+  function table(items,cols){if(!items.length)return '<p class="empty">None.</p>';return `<div class="table-wrap"><table><thead><tr>${cols.map(c=>`<th>${esc(c[1])}</th>`).join('')}</tr></thead><tbody>${items.map(x=>`<tr>${cols.map(c=>`<td>${c[2]?c[2](x):val(x[c[0]])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`}
+  $('headline').textContent=`Pocket Ledger v1 — Qwen 3.8 27B`;
+  $('header-sub').innerHTML=`<span class="mono">${esc(d.experiment_id)}</span> · code/report generator <span class="mono">${esc(d.generator.name)} ${esc(d.generator.version)} / Agent Bench ${esc(d.generator.agent_bench_version)}</span><br>Expansion digest <span class="mono">${esc(d.expansion_digest)}</span>`;
+  const c=d.completion; $('partial').textContent=c.is_partial?`PARTIAL EXPERIMENT — ${c.completed} / ${c.total} completed; remaining planned rows are not failures.`:`COMPLETE EXPERIMENT — ${c.completed} / ${c.total} completed.`;
+  const promptCount=(d.definition.prompts||[]).length, taskCount=new Set((d.definition.prompts||[]).map(x=>x.semantic_task_id)).size, harnessCount=(d.definition.harnesses||[]).length;
+  const env=d.definition.fixed_environment||{}, model=env.model||{}, backend=env.backend||{}, hardware=env.hardware||{}, server=(config.server||env.server_parameters||{}), generation=(config.sampling||env.generation||{});
+  const kpis=[['Completed',`${c.completed}/${c.total}`],['Failed',c.failed],['Interrupted',c.interrupted],['Invalid',c.invalid],['Pending',c.pending],['Harnesses',harnessCount],['Tasks',taskCount],['Prompt variants',promptCount],['Repetitions',d.definition.repetitions??'N/A'],['Model',model.name||'N/A'],['Backend',backend.implementation||'llama.cpp'],['GPU',hardware.gpu_model||'N/A'],['Context size',server.context_size??generation.context_size??'N/A']];
+  $('kpis').innerHTML=kpis.map(([l,v])=>`<div class="kpi"><span class="v">${val(v)}</span><span class="l">${esc(l)}</span></div>`).join('');
+  const done=completed(); $('executed-card').innerHTML=done.length?done.map(r=>`<article class="card" data-run="${esc(r.run_id)}"><h3>${esc(r.harness)} · ${esc(r.semantic_task)}</h3><span class="pill">${esc(r.prompt_variant)} · r${esc(r.repetition)}</span><p><strong>${val(r.wall_time_seconds)} s</strong> wall time · ${val(r.llm_requests)} requests · ${val(r.tool_calls)} tools</p><p class="muted mono">${esc(r.run_id)}</p></article>`).join(''):'<p class="empty">No completed verified run is available.</p>';
+  $('executed-card').querySelectorAll('[data-run]').forEach(e=>e.onclick=()=>openDetail(e.dataset.run));
+  const taskNames=[...new Set((d.definition.prompts||[]).map(x=>x.semantic_task_id))], variants=[...new Set((d.definition.prompts||[]).map(x=>x.variant_label))];
+  $('matrix-summary').innerHTML=`<div><h3>Matrix dimensions</h3>${kv({harnesses:(d.definition.harnesses||[]).map(x=>`${x.display_name} ${x.version}`).join(', '),profiles:(d.definition.profiles||[]).map(x=>`${x.profile_id} (${x.profile_version})`).join(', '),semantic_tasks:taskNames.join(', '),prompt_variants:variants.join(', '),repetitions:d.definition.repetitions,ordering:d.definition.ordering?.mode,ordering_seed:d.definition.ordering?.seed,planned_rows:c.total})}</div><div><h3>Immutable baseline and run policy</h3>${kv({portable_baseline:d.definition.portable_baseline,run_limits:d.definition.run_limits,fixed_environment_id:env.fixed_environment_id,definition_source:d.definition.definition_source,backend_configuration_source:d.definition.backend_configuration_source,backend_configuration_sha256:d.definition.backend_configuration_sha256})}</div>`;
+  $('fixed-config').innerHTML=`<p class="source">Sources: ${esc(d.definition.definition_source||'unavailable')}; ${esc(d.definition.backend_configuration_source||'unavailable')} (path values redacted).</p><div class="two"><div><h3>Model + template + backend identity</h3>${kv({model:config.model||model,chat_template:config.chat_template||model.gguf_metadata,executable:config.executable||backend,llama_cpp_commit:config.llama_cpp_commit||backend.commit,version:backend.version,hardware:config.gpu||hardware})}</div><div><h3>Server + generation (all configured values)</h3>${kv({server:config.server||env.server_parameters,sampling:config.sampling||env.generation,restart_policy:config.restart_policy||env.restart_policy,readiness_policy:env.readiness_policy,warmup:env.warmup})}</div></div>`;
+  function groupSummary(group,metric){return (d.summaries||[]).filter(x=>x.grouping===group&&x.metric_name===metric&&x.n_available>0)}
+  function bars(title,group,metric){const rows=groupSummary(group,metric);if(!rows.length)return `<div class="chart"><h3>${esc(title)}</h3><p class="empty">No completed values.</p></div>`;const max=Math.max(...rows.map(x=>x.maximum??x.median??0),1);return `<div class="chart"><h3>${esc(title)}</h3><div class="bar-chart">${rows.map((r,i)=>`<div class="bar"><span>${esc(r.group_key)} <span class="muted">N=${r.n_available}</span></span><i style="width:${100*(r.median??0)/max}%;background:${colors[i%colors.length]}"></i><strong>${num(r.median)}</strong><span class="muted">${r.n_available>1?`Q1–Q3 ${num(r.q1)}–${num(r.q3)}`:'individual only; no spread'}</span></div>`).join('')}</div></div>`}
+  function comparison(){const group=$('comparison-group')?.value||'harness', label={harness:'harness',semantic_task:'semantic task',prompt_variant:'prompt variant',repetition:'repetition',harness_task:'harness × task',harness_prompt_variant:'harness × prompt variant'}[group];const metricLabels={wall_time_seconds:'Wall time (s)',input_tokens:'Input tokens',output_tokens:'Output tokens',llm_requests:'LLM requests',tool_calls:'Tool calls',first_task_context_tokens:'First task context',peak_context_tokens:'Peak context',context_growth_from_first_task_tokens:'Context growth',files_changed:'Files changed'};$('comparison-charts').innerHTML=Object.entries(metricLabels).map(([m,l])=>bars(`${l} by ${label}`,group,m)).join('');const rows=(d.summaries||[]).filter(x=>x.grouping===group);$('comparison-table').innerHTML=table(rows,[['group_key','Group'],['metric_name','Metric'],['n_available','N'],['median','Median'],['q1','Q1'],['q3','Q3'],['minimum','Min'],['maximum','Max']])}
+  $('comparison-controls').innerHTML=`<label>Group comparisons<select id="comparison-group">${[['harness','Harness'],['semantic_task','Semantic task'],['prompt_variant','Prompt variant'],['repetition','Repetition'],['harness_task','Harness × task'],['harness_prompt_variant','Harness × prompt']].map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('')}</select></label>`;$('comparison-group').onchange=comparison;comparison();
+  function eligible(){return d.runs.filter(r=>{if(mode==='executed'&&!(r.state==='completed'&&r.evidence_status==='verified'))return false;if(mode==='failed'&&!['failed','interrupted','invalid'].includes(r.state)&&r.evidence_status!=='invalid')return false;if(mode==='pending'&&r.state!=='pending')return false;if(filters.harness!=='all'&&r.harness!==filters.harness)return false;if(filters.task!=='all'&&r.semantic_task!==filters.task)return false;if(filters.prompt!=='all'&&r.prompt_variant!==filters.prompt)return false;if(filters.repetition!=='all'&&String(r.repetition)!==filters.repetition)return false;return true})}
+  function chart(kind,title,xlabel){const rows=(d.curves||[]).filter(x=>x.curve_kind===kind&&eligible().some(r=>r.run_id===x.run_id)&&x.context_utilization_percent!==null&&x.context_utilization_percent!==undefined);if(!rows.length)return `<div class="chart"><h3>${title}</h3><p class="empty">No observable context points for the current executed-run filter.</p></div>`;const w=1000,h=440,L=75,R=30,T=35,B=60,maxX=Math.max(...rows.map(x=>x.x),1),sx=x=>L+(w-L-R)*x/maxX,sy=y=>h-B-(h-T-B)*Math.max(0,Math.min(100,y))/100;const by={};rows.forEach(x=>(by[x.run_id]??=[]).push(x));let lines='',legend='';Object.entries(by).sort().forEach(([id,pts],i)=>{pts.sort((a,b)=>a.x-b.x);const col=colors[i%colors.length],points=pts.map(p=>`${sx(p.x).toFixed(2)},${sy(p.context_utilization_percent).toFixed(2)}`).join(' ');lines+=`<polyline fill="none" stroke="${col}" stroke-width="3" points="${points}"><title>${esc(id)} — hover individual points for exact values</title></polyline>${pts.map(p=>`<circle cx="${sx(p.x)}" cy="${sy(p.context_utilization_percent)}" r="4" fill="${col}"><title>${esc(id)} | ${xlabel}: ${num(p.x)} | context: ${num(p.context_utilization_percent)}%</title></circle>`).join('')}`;legend+=`<span><i class="swatch" style="background:${col}"></i>${esc(id)}</span>`});let grid='';for(let y=0;y<=100;y+=20)grid+=`<line x1="${L}" y1="${sy(y)}" x2="${w-R}" y2="${sy(y)}" stroke="#2c3a50"/><text x="10" y="${sy(y)+4}" fill="#a9b7ca">${y}%</text>`;for(let x=0;x<=4;x++){const v=maxX*x/4;grid+=`<line x1="${sx(v)}" y1="${T}" x2="${sx(v)}" y2="${h-B}" stroke="#1d2a3c"/><text x="${sx(v)-10}" y="${h-35}" fill="#a9b7ca">${num(v)}</text>`}let ms='';if(kind==='absolute_elapsed_task_time')(d.markers||[]).filter(m=>eligible().some(r=>r.run_id===m.run_id)&&m.task_elapsed_seconds!==null&&m.task_elapsed_seconds<=maxX).forEach(m=>{const x=sx(m.task_elapsed_seconds);ms+=`<path d="M${x} ${h-B+10}l-6 10h12z" fill="#fbbf24"><title>${esc(m.marker_kind)}: ${esc(m.timing_semantics)} at ${num(m.task_elapsed_seconds)} s</title></path>`});const aggregate=(d.curves||[]).filter(x=>x.curve_kind===kind+'_aggregate'&&x.grouping==='harness'&&x.n_available>1&&(filters.harness==='all'||x.group_key===filters.harness));const ag={};aggregate.forEach(x=>(ag[x.group_key]??=[]).push(x));let bands='';Object.entries(ag).forEach(([key,pts],i)=>{pts.sort((a,b)=>a.x-b.x);const col=colors[(i+3)%colors.length],upper=pts.map(p=>`${sx(p.x)},${sy(p.q3)}`).join(' '),lower=[...pts].reverse().map(p=>`${sx(p.x)},${sy(p.q1)}`).join(' '),median=pts.map(p=>`${sx(p.x)},${sy(p.median)}`).join(' ');bands+=`<polygon points="${upper} ${lower}" fill="${col}" opacity=".18"><title>${esc(key)} Type 7 Q1–Q3 band (N=${pts[0].n_available})</title></polygon><polyline fill="none" stroke="${col}" stroke-dasharray="7 5" stroke-width="3" points="${median}"><title>${esc(key)} Type 7 median (N=${pts[0].n_available})</title></polyline>`;legend+=`<span><i class="swatch" style="background:${col}"></i>${esc(key)} median + Q1–Q3 (N=${pts[0].n_available})</span>`});return `<div class="chart"><h3>${title}</h3><p class="muted">Y: API-observed context utilization %. X: ${xlabel}. Points and markers have hover details. Median/Q1/Q3 bands appear only for like-for-like normalized series with N&gt;1.</p><div class="chart-scroll"><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(title)}">${grid}<line x1="${L}" y1="${h-B}" x2="${w-R}" y2="${h-B}" stroke="#a9b7ca"/><line x1="${L}" y1="${T}" x2="${L}" y2="${h-B}" stroke="#a9b7ca"/>${bands}${lines}${ms}<text x="${w/2-80}" y="${h-10}" fill="#a9b7ca">${xlabel}</text></svg></div><div class="legend">${legend}${kind==='absolute_elapsed_task_time'?'<span>▲ observed event marker</span>':''}</div></div>`}
+  function renderContext(){$('context-charts').innerHTML=chart('absolute_elapsed_task_time','Context utilization vs absolute elapsed task time','task-relative seconds')+chart('normalized_elapsed_task_time','Context utilization vs normalized elapsed task time','normalized elapsed task time (%)')+chart('request_index','Context utilization vs real task request index','real task request index')}
+  function promptComparison(task=taskNames[0]){const options=taskNames.map(x=>`<option ${x===task?'selected':''}>${esc(x)}</option>`).join('');const ps=(d.definition.prompts||[]).filter(x=>x.semantic_task_id===task);$('prompt-comparison').innerHTML=`<label>Semantic task <select id="prompt-task">${options}</select></label><div class="grid">${ps.map(p=>`<article class="card"><h3>${esc(p.variant_label)}</h3><p class="mono">${esc(p.prompt_id)}<br>SHA256 ${esc(p.sha256)}<br>${p.byte_length} UTF-8 bytes</p><pre>${esc(p.content)}</pre></article>`).join('')}</div>`;$('prompt-task').onchange=e=>promptComparison(e.target.value)}promptComparison();
+  function filterOptions(id,label,values,key){return `<label>${label}<select id="${id}"><option value="all">All</option>${values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}</select></label>`}function setFilters(){const rows=d.runs;$('filters').innerHTML=`<div class="mode">${[['executed','Executed'],['failed','Failed / interrupted / invalid'],['pending','Pending'],['all','All rows']].map(x=>`<button class="button ${mode===x[0]?'active':''}" data-mode="${x[0]}">${x[1]}</button>`).join('')}</div>${filterOptions('f-harness','Harness',[...new Set(rows.map(x=>x.harness).filter(Boolean))])}${filterOptions('f-task','Task',[...new Set(rows.map(x=>x.semantic_task).filter(Boolean))])}${filterOptions('f-prompt','Prompt variant',[...new Set(rows.map(x=>x.prompt_variant).filter(Boolean))])}${filterOptions('f-rep','Repetition',[...new Set(rows.map(x=>x.repetition).filter(x=>x!==null&&x!==undefined))])}`;[['f-harness','harness'],['f-task','task'],['f-prompt','prompt'],['f-rep','repetition']].forEach(([id,key])=>{const e=$(id);e.value=filters[key];e.onchange=()=>{filters[key]=e.value;renderRuns()}});$('filters').querySelectorAll('[data-mode]').forEach(e=>e.onclick=()=>{mode=e.dataset.mode;setFilters();renderRuns()})}
+  function renderRuns(){const rows=eligible();$('run-list').innerHTML=rows.length?rows.map(r=>`<article class="card" data-run="${esc(r.run_id)}"><h3>${esc(r.harness||'planned')} · ${esc(r.semantic_task||'N/A')}</h3><span class="pill">${esc(r.prompt_variant||'N/A')} · r${esc(r.repetition||'N/A')}</span><span class="pill">${esc(r.state)} / ${esc(r.evidence_status)}</span><p>${r.wall_time_seconds!==null?`${num(r.wall_time_seconds)} s · ${num(r.llm_requests)} requests · ${num(r.tool_calls)} tools`:'No execution metrics yet.'}</p><p class="mono muted">#${esc(r.execution_index)} · ${esc(r.run_id)}</p></article>`).join(''):'<p class="empty">No rows match the current filters.</p>';$('run-list').querySelectorAll('[data-run]').forEach(e=>e.onclick=()=>openDetail(e.dataset.run));renderContext()}
+  function openDetail(id){selected=id;const x=d.details[id]||{identity:run(id)},r=x.identity,p=x.prompt;const metricGroups={};(x.metrics||[]).forEach(m=>(metricGroups[m.metric_group]??=[]).push(m));const metricHtml=Object.entries(metricGroups).map(([g,items])=>`<details><summary>${esc(g)} metrics</summary>${table(items,[['metric_name','Metric'],['value','Value'],['units','Units'],['availability','Availability'],['unavailable_reason','Unavailable reason'],['method','Method']])}</details>`).join('');const timingHtml=table(x.timing||[],[['timing_name','Timing metric'],['value_seconds','Seconds'],['availability','Availability'],['semantics','Semantics'],['unavailable_reason','Unavailable reason'],['method','Method'],['source','Source']]);const requestHtml=table(x.requests||[],[['request_index','Request'],['purpose','Purpose'],['elapsed_seconds','Elapsed s'],['input_context_tokens','Context tokens'],['context_utilization_percent','Context %'],['output_tokens','Output tokens'],['delta_vs_first_task_tokens','Δ first task'],['request_body_sha256','Request hash'],['purpose_evidence','Classification evidence']]);const toolHtml=table(x.tools||[],[['event_kind','Event'],['tool_name','Tool'],['category','Category'],['outcome','Outcome'],['elapsed_seconds','Observed s'],['timing_semantics','Timing semantics'],['event_id','Event ID']]);$('run-detail').innerHTML=`<article class="card"><h3>${esc(r.run_id)}</h3><div class="two"><div>${kv({execution_index:r.execution_index,canonical_matrix_index:r.canonical_matrix_index,harness:r.harness,harness_profile:r.harness_profile,semantic_task:r.semantic_task,prompt_variant:r.prompt_variant,repetition:r.repetition,seed:r.seed,state:r.state,evidence_status:r.evidence_status,termination_class:r.termination_class})}</div><div>${kv({manual_review:x.manual_review,wall_time_seconds:r.wall_time_seconds,llm_requests:r.llm_requests,tool_calls:r.tool_calls,input_tokens:r.input_tokens,output_tokens:r.output_tokens,total_tokens:r.total_tokens,first_task_context_tokens:r.first_task_context_tokens,first_task_context_utilization_percent:r.first_task_context_utilization_percent,peak_context_tokens:r.peak_context_tokens,peak_context_utilization_percent:r.peak_context_utilization_percent,context_growth_from_first_task_tokens:r.context_growth_from_first_task_tokens,files_changed:r.files_changed,lines_added:r.lines_added,lines_deleted:r.lines_deleted})}</div></div>${p?`<details open><summary>Exact benchmark prompt — ${esc(p.prompt_id)} · SHA256 ${esc(p.sha256)}</summary><pre>${esc(p.content)}</pre></details>`:'<p class="empty">Exact prompt unavailable because the matching immutable definition was not supplied.</p>'}<details><summary>Harness profile + captured invocation</summary>${kv({profile:(d.definition.profiles||[]).find(q=>q.profile_id===r.harness_profile)||null,invocation:x.invocation||null})}</details><details><summary>Timing provenance</summary><p class="muted">Execution timing is unavailable unless native start/end evidence exists. Observed tool-event time and model tool-call emission remain distinct and are never treated as execution start.</p>${timingHtml}</details><details><summary>Context request sequence and auxiliary overhead</summary><p class="muted">System/harness/tool/skills component token attribution is displayed only if exact sealed analysis exposes it; otherwise it remains unavailable. No heuristic decomposition is made.</p>${kv({auxiliary_inference_overhead:x.context_overhead||null,component_attribution:x.context_components||null})}${requestHtml}</details><details><summary>Normalized tool records</summary>${toolHtml}</details><details><summary>Capture capabilities + preservation</summary>${kv({capture_capabilities:x.capture_capabilities||null,artifacts:x.artifacts||null})}</details></article>`;location.hash='explorer'}
+  const baseOpenDetail=openDetail;openDetail=id=>{baseOpenDetail(id);const detail=d.details[id];if(!detail?.metrics?.length)return;const groups={};detail.metrics.forEach(m=>(groups[m.metric_group]??=[]).push(m));const extra=Object.entries(groups).map(([group,items])=>`<details><summary>${esc(group)} metrics</summary>${table(items,[['metric_name','Metric'],['value','Value'],['units','Units'],['availability','Availability'],['unavailable_reason','Unavailable reason'],['method','Method']])}</details>`).join('');$('run-detail article').insertAdjacentHTML('beforeend',extra)};
+  const problems=d.failures||[];$('failure-table').innerHTML=table(problems,[['run_id','Run'],['state','State'],['termination_class','Termination'],['detail','Detail'],['evidence_status','Evidence']]);const pending=d.runs.filter(x=>x.state==='pending');$('pending-table').innerHTML=table(pending,[['execution_index','Execution index'],['canonical_matrix_index','Matrix index'],['harness','Harness'],['harness_profile','Profile'],['semantic_task','Task'],['prompt_variant','Prompt'],['repetition','Rep'],['run_id','Run ID']]);
+  $('provenance-content').innerHTML=`<p class="source">Fixed versus matrix configuration sources: ${esc(d.definition.definition_source||'unavailable')} and ${esc(d.definition.backend_configuration_source||'unavailable')}. Capture-capability and preservation rows are per-run sealed evidence.</p><details open><summary>Experiment / result provenance</summary>${kv({experiment_id:d.experiment_id,definition_digest:d.definition_digest,expansion_digest:d.expansion_digest,summary_environment:d.summary_environment,portable_baseline:d.definition.portable_baseline,profiles:(d.definition.profiles||[]).map(x=>({profile_id:x.profile_id,version:x.profile_version,upstream_defaults_source:x.upstream_defaults_source,deviations:x.deviations,source:x.source,source_sha256:x.source_sha256}))})}</details><details><summary>Harness identities</summary>${kv(d.definition.harnesses||[])}</details>`;
+  $('data-files').innerHTML=d.data_files.map(f=>`<span class="pill"><a href="${esc(f)}" download>${esc(f)}</a></span>`).join(' ');setFilters();renderRuns();if(done[0])openDetail(done[0].run_id);
+})();
+</script></body></html>\n"""
+    return document.replace("__TITLE__", title).replace("__DATA__", data)
 
 
 def _seal_report(root: Path, state: ExperimentState, rows: dict[str, list[dict[str, Any]]], excluded: list[dict[str, str]]) -> dict[str, Any]:

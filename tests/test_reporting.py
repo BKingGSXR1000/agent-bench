@@ -13,13 +13,17 @@ import pytest
 
 from agent_bench.reporting import (
     SCHEMAS,
+    _html_report,
     _append_curves,
     _append_summaries,
     _assert_public_safe,
     _build_database,
     _write_parquet,
+    build_report,
+    export_public,
     normalized_elapsed_curve,
     quantile_type7,
+    verify_report,
 )
 
 
@@ -74,6 +78,7 @@ def test_synthetic_multi_harness_aggregation_and_parquet_duckdb(tmp_path: Path) 
     assert harness_rows[0]["n_planned"] == 18
     assert harness_rows[0]["n_available"] == 18
     assert any(row["grouping"] == "harness_task_prompt_variant" for row in summaries)
+    assert any(row["grouping"] == "repetition" for row in summaries)
 
     points = [
         {"experiment_id": "synthetic-v1", "run_id": run["run_id"], "request_index": 1, "is_auxiliary": False,
@@ -124,14 +129,50 @@ def test_public_privacy_audit_rejects_secret_and_personal_path(tmp_path: Path) -
         _assert_public_safe(tmp_path)
 
 
+def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() -> None:
+    runs = [
+        _run(harness=harness, task=task, variant=variant, repetition=repetition, value=1.0)
+        for harness in ("opencode", "pi", "hermes")
+        for task in ("task-a", "task-b", "task-c", "task-d", "task-e")
+        for variant in ("vague", "normal", "precise")
+        for repetition in (1, 2, 3)
+    ]
+    for index, item in enumerate(runs, start=1):
+        item.update({"execution_index": index, "canonical_matrix_index": index, "harness_profile": f"{item['harness']}-default-v1", "prompt_id": f"{item['semantic_task']}-{item['prompt_variant']}", "seed": 1000 + index})
+    presentation = {
+        "generator": {"name": "agent-bench-report", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 135, "completed": 135, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 3, "harnesses": [{"harness_id": h, "display_name": h, "version": "1"} for h in ("opencode", "pi", "hermes")], "profiles": [], "prompts": [], "fixed_environment": {"model": {"name": "Qwen 3.8 27B"}}, "backend_configuration": {"server": {"context_size": 107520}}, "portable_baseline": {}},
+        "summary_environment": {}, "runs": runs, "summaries": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [],
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "AGENT BENCH" in output
+    assert "Run Explorer" in output
+    assert "Pending / Planned" in output
+    assert "individual only; no spread" in output
+    assert "median + Q1–Q3" in output
+    assert "Prompt variant" in output and "Repetition" in output
+    assert "opencode-task-a-vague-1" in output
+    assert "135" in output
+
+
 def test_real_smoke_is_reportable_read_only_when_available(tmp_path: Path) -> None:
     """A checkout without local smoke evidence still has fully synthetic coverage."""
     source = Path("runs/m9b-real-smoke-v3")
     if not source.is_dir():
         pytest.skip("authoritative host smoke evidence is not present in this checkout")
-    # The CLI/integration check creates the production report; this test proves
-    # the existing report remains a valid, read-only derived artifact.
-    summary = json.loads((source / "report-v1" / "summary.json").read_text(encoding="utf-8"))
+    report = build_report(source, output=tmp_path / "report-v1", experiment_definition=Path("experiments/pocket-ledger-v1.yaml"))
+    assert verify_report(report.root)["experiment_id"] == "pocket-ledger-v1-qwen38"
+    summary = json.loads((report.root / "summary.json").read_text(encoding="utf-8"))
     assert summary["completion"]["total"] == 135
     assert summary["completion"]["completed"] == 1
     assert summary["completion"]["is_partial"] is True
+    dashboard = (report.root / "report.html").read_text(encoding="utf-8")
+    assert "PARTIAL EXPERIMENT" in dashboard
+    assert "hermes-hermes-default-v1-keyboard-entry-vague-r001" in dashboard
+    assert "Timing provenance" in dashboard
+    assert "<host-path-redacted>" in dashboard
+    assert "/home/bking/" not in dashboard
+    public = export_public(report.root, tmp_path / "public")
+    assert verify_report(public)["experiment_id"] == "pocket-ledger-v1-qwen38"

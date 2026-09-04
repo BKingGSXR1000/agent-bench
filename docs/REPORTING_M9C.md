@@ -48,6 +48,7 @@ report-v1/
     git_change_metrics.parquet curves.parquet        summaries.parquet
   agent-bench.duckdb
   charts.json
+  presentation.json
   summary.json
   raw-archival-manifest.json
   report.html
@@ -62,6 +63,35 @@ matrix index, harness/profile, task, prompt variant, repetition, and seed.
 and `context_points` retain hashes and numeric observations but never raw request
 bodies or reasoning. `artifacts` contains only relative provenance and content
 hashes, never execution-host paths.
+
+## Offline dashboard and run explorer
+
+`report.html` is a self-contained, dependency-free dashboard driven by the
+sealed, sanitized `presentation.json` companion. It is a human-facing view of
+the same deterministic report data, not a new analysis layer and not a source
+of measurements. It presents, in order:
+
+- a partial/complete experiment header and execution KPI cards;
+- matrix dimensions alongside the fixed model, template, llama.cpp, GPU,
+  server, sampling, and generation configuration read from versioned sources;
+- individual-run comparison charts and deterministic Type 7 summaries grouped
+  by harness, task, prompt variant, and their supported combinations;
+- three context views (absolute task-relative time, normalized elapsed task
+  time, and real task request index), with labelled observed markers and
+  median/Q1/Q3 bands only for like-for-like normalized series with `N > 1`;
+- exact prompt text and hash, profile/deviation identity, sanitized meaningful
+  invocation flags, metric availability/provenance, request hashes, normalized
+  tool records, capture capabilities, and preservation hashes for a selected
+  run;
+- separate failure/interruption and pending/planned sections; pending rows are
+  never displayed as failures.
+
+The report deliberately preserves unavailable values and their reasons. It
+does not invent component token attribution, task quality, manual review,
+tool-execution timestamps, or a comparison winner. Full host paths, secrets,
+raw request bodies, and reasoning are excluded; path values in presentation
+metadata are replaced with a host-path-redacted label. `presentation.json` is
+covered by the report manifest and checksums and is included in public export.
 
 The DuckDB database materializes those tables and exposes `all_runs`,
 `successful_runs`, `failed_runs`, `per_harness_metrics`, `per_task_metrics`,
