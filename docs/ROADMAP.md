@@ -147,7 +147,24 @@ Status: completed
 
 Same requirements as M6 for Hermes.
 
-## M9 — Analytical storage and deterministic reporting
+## M9A — Benchmark Subject / Frozen Baseline / Tasks / Prompts
+
+Status: completed
+
+Implement the independent frozen benchmark subject, its baseline Git commit,
+task suite, byte-exact vague/normal/precise prompts, evaluator-only acceptance
+criteria, manual-review dimensions, and representative non-executed expansion.
+
+## M9B — Experiment Executor / Resume / Matrix Automation / Progress
+
+Status: pending
+
+Implement controlled matrix execution, resume, progress, and subject baseline
+selection. Do not broaden M9A into execution.
+
+## M9C — Reporting / DuckDB / Parquet / HTML / Charts
+
+Status: pending
 
 Introduce only now as required:
 - Parquet/PyArrow

@@ -1,0 +1,1 @@
+Make adding entries faster from the keyboard.

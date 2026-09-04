@@ -1,0 +1,1 @@
+Add a category to Pocket Ledger entries so I can choose one while adding an entry and see it in the list. Existing saved entries should still work.

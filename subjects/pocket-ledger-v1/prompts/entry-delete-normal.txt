@@ -1,0 +1,1 @@
+Add a simple way to delete an individual Pocket Ledger entry. The balance and saved entries should update accordingly.

@@ -1,0 +1,1 @@
+Add a clearly labelled text filter above the entry list. Matching should be case-insensitive against descriptions, must not mutate saved entries or the balance, and should show a helpful empty result when no entries match.

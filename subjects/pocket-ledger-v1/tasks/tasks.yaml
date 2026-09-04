@@ -1,0 +1,23 @@
+schema_version: 1.0.0
+subject_id: pocket-ledger-v1
+tasks:
+  - id: entry-delete
+    title: Delete an entry
+    acceptance: Delete control removes only its entry, updates balance and persists after reload.
+    manual_review: [functional_correctness, ui_consistency, unnecessary_changes]
+  - id: entry-filter
+    title: Filter visible entries
+    acceptance: Text filter is case-insensitive, affects only visible entries, and has an empty result state.
+    manual_review: [functional_correctness, usability, edge_cases]
+  - id: entry-category
+    title: Categorize entries
+    acceptance: Entries have a selectable category, display it, and persist it without breaking old stored entries.
+    manual_review: [functional_correctness, ui_consistency, robustness]
+  - id: monthly-summary
+    title: Monthly summary
+    acceptance: A visible summary separates income, expenses and net from the entries, including empty data.
+    manual_review: [functional_correctness, completeness, visual_quality]
+  - id: keyboard-entry
+    title: Faster keyboard entry
+    acceptance: A documented keyboard shortcut focuses the description field without interfering with typing in inputs.
+    manual_review: [functional_correctness, usability, regressions]

@@ -1,0 +1,1 @@
+Add an accessible delete control for each Pocket Ledger entry. Deleting one entry must remove only that entry, immediately recalculate the balance, persist the change in local storage, and leave the empty-state behavior correct.

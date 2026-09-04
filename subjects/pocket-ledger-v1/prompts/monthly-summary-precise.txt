@@ -1,0 +1,1 @@
+Add a visible summary section that independently shows total positive entries, total negative entries, and net balance. Format values consistently with the existing euro amounts and show valid zero values when there are no entries.

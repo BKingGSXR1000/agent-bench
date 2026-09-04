@@ -1,0 +1,1 @@
+Add a keyboard shortcut that focuses the Pocket Ledger description field, and make the shortcut discoverable in the interface.

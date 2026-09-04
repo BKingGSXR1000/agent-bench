@@ -1,0 +1,19 @@
+schema_version: 1.0.0
+subject_id: pocket-ledger-v1
+subject_version: 1.0.0
+baseline_repository: baseline-repo
+baseline_commit: 7326e6a06de7f693db5ac70a16363e47b620d4fb
+baseline_tree: 663ea314b9d5f1b378abad28693085d0609386bc
+baseline_bundle: baseline-v1.bundle
+baseline_bundle_sha256: 1c2c0cd14ec402f29817d7b0c2ee530380ab85dd19e765fdd94338fe6720086d
+runtime:
+  language: JavaScript
+  runtime: browser with Python 3.12+ static HTTP server
+  package_manager: none
+  dependency_lockfile: none
+commands:
+  test: [python3, tests/test_baseline.py]
+  run: [python3, -m, http.server, "8000"]
+  smoke: [python3, tests/test_baseline.py]
+project_instruction_policy: no_project_instruction_file
+evaluator_metadata_visible_to_harness: false

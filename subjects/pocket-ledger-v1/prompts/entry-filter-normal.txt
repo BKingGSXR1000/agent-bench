@@ -1,0 +1,1 @@
+Add a text filter to Pocket Ledger so I can quickly find entries by their description without changing the saved data.

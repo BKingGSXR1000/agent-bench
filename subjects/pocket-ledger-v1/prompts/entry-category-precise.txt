@@ -1,0 +1,1 @@
+Add a small fixed category selector to the entry form and display each entry's selected category in the list. Persist the category with entries, provide a sensible fallback for entries already stored without one, and keep the current balance calculation unchanged.

@@ -1,0 +1,1 @@
+Add a compact summary to Pocket Ledger that shows total income, total expenses, and the resulting net amount from the current entries.

@@ -1,0 +1,1 @@
+Add a visible, documented keyboard shortcut that focuses the description field. It must not hijack normal typing when the user is already in an input or textarea, and should work without changing the existing add-entry flow.
