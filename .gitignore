@@ -6,6 +6,11 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# Benchmark-managed JavaScript toolchain payloads; manifests and lockfiles remain tracked.
+toolchains/*/*/node_modules/
+# The pinned Node executable is a local benchmark-toolchain payload; its identity is tracked.
+toolchains/node/*/bin/node
+
 runs/
 artifacts/
 .bench/

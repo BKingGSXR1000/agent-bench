@@ -1,0 +1,28 @@
+schema_version: 1.0.0
+profile_id: pi-default-v1
+profile_version: 1.0.1
+toolchain_identity_file: ../../../toolchains/pi/0.84.4/identity.json
+models_file: models.json
+models_sha256: 9928e6f3ed9b7c6ec313a5eca4919b9faa70cf95ac948736e01dd77fc0d35aa7
+settings_file: settings.json
+settings_sha256: ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+proxy_base_url: http://127.0.0.1:18081/v1
+provider_id: agent-bench
+model_id: qwen3.8-27b
+invocation:
+  output_mode: json
+  non_interactive: true
+  project_trust: upstream_fresh_default
+  startup_network: disabled
+  telemetry: disabled
+  prompt_delivery: positional_exact_utf8
+  thinking_level: upstream_default_medium
+deviations:
+  - Registers one OpenAI-compatible provider pointed at the Agent Bench proxy.
+  - Selects the fixed Qwen benchmark model and records its 107520-token context window.
+  - Uses Pi's documented qwen-chat-template compatibility mode so each request explicitly enables thinking and preserves non-empty historical thinking.
+  - Keeps Pi 0.84.4's default medium thinking level and documented 16384-token custom-model output limit.
+  - Retains Pi's normal extension, skill, prompt-template, theme, AGENTS.md, and CLAUDE.md discovery behavior; fresh run-owned state prevents personal configuration from being imported.
+  - Disables startup catalog/update networking and install telemetry; model requests to the local proxy remain enabled.
+  - Uses native JSON non-interactive mode and preserves a fresh native session for observability.
+  - Delivers the prompt as one positional message because Pi 0.84.4 trims piped stdin; positional delivery preserves exact leading and trailing UTF-8 whitespace.

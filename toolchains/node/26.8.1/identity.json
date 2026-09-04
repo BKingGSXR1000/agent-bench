@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "runtime": "node",
+  "version": "v26.8.1",
+  "path": "/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin/node",
+  "size_bytes": 150425704,
+  "sha256": "19235a9b678f84729464c52623f92de130a165452747c6826d3fdc13df3abcc3",
+  "installation_method": "byte-identical local copy of the Node 26.8.1 ELF used to install Pi 0.84.4",
+  "source_path_at_install": "/home/bking/.hermes/node/bin/node",
+  "source_sha256": "19235a9b678f84729464c52623f92de130a165452747c6826d3fdc13df3abcc3",
+  "runtime_dependencies": "ELF executable linked only against standard host libraries recorded by ldd; no Hermes shell initialization or Hermes runtime files are used at benchmark execution."
+}

@@ -137,6 +137,8 @@ Implement controlled OpenCode execution:
 
 ## M7 — Pi adapter
 
+Status: completed
+
 Same requirements as M6 for Pi.
 
 ## M8 — Hermes adapter

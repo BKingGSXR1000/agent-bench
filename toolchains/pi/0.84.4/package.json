@@ -1,0 +1,9 @@
+{
+  "name": "agent-bench-pi-toolchain-0.84.4",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Benchmark-managed Pi 0.84.4 toolchain",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0.0",
+  "package": {
+    "name": "@earendil-works/pi-coding-agent",
+    "version": "0.84.4",
+    "registry_tarball": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.84.4.tgz",
+    "registry_integrity": "sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w==",
+    "registry_shasum": "3a2f04bfc5e463b4cfa36b174a586d11a0bdf9ad"
+  },
+  "installation": {
+    "method": "npm prefix installation with exact dependency and package-lock v3",
+    "root": "/home/bking/AI/agent-bench/toolchains/pi/0.84.4",
+    "argv": [
+      "npm",
+      "install",
+      "--prefix",
+      "/home/bking/AI/agent-bench/toolchains/pi/0.84.4",
+      "--save-exact",
+      "--no-audit",
+      "--no-fund",
+      "--cache",
+      "/tmp/agent-bench-npm-cache-pi-0.84.4"
+    ],
+    "node_version": "v26.8.1",
+    "npm_version": "11.19.0",
+    "npm_path": "/home/bking/.local/bin/npm",
+    "npm_realpath": "/home/bking/.hermes/node/lib/node_modules/npm/bin/npm-cli.js",
+    "npm_launcher_path": "/home/bking/.hermes/node/bin/npm",
+    "npm_launcher_sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+    "package_json_sha256": "59467ec7db2717749b33bb6d73f342cde9b29100da69eb7472f4a786386e41fa",
+    "package_lock_sha256": "0a17cfe0aec6feac066848975c9623ac9a6d8e6b6d9386f37c7241c9ddb9ed5c",
+    "installed_package_json_sha256": "db9fead11bd2ddf7a327d2c2d11b535f30d059241c251d376837d5ab638a5576",
+    "installed_package_shrinkwrap_sha256": "a137fbb6530359fda4aa1212eb1d8ad54157bddced042ea24d8e566eea21ec54",
+    "node_modules_tree_digest_algorithm": "sha256 over sorted F\\0path\\0content_sha256\\n and L\\0path\\0target\\n records",
+    "node_modules_tree_sha256": "ddeed9f6a8318fde30f8a8bff3b38c7d0d4151fe1bbee3181ded1dbae2385d71",
+    "node_modules_tree_records": 12538
+  },
+  "runtime": {
+    "node_path": "/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin/node",
+    "node_size_bytes": 150425704,
+    "node_sha256": "19235a9b678f84729464c52623f92de130a165452747c6826d3fdc13df3abcc3",
+    "entrypoint_path": "/home/bking/AI/agent-bench/toolchains/pi/0.84.4/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+    "entrypoint_size_bytes": 629,
+    "entrypoint_sha256": "5406c369954516fb56879d685e082ff9095cd6e06e41af406f394942377fd4bf",
+    "npm_bin_path": "/home/bking/AI/agent-bench/toolchains/pi/0.84.4/node_modules/.bin/pi",
+    "npm_bin_target": "../@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+    "version_output": "0.84.4",
+    "cli_help_path": "cli-help.txt",
+    "cli_help_sha256": "894957a01dfbf97ec0723edadbbc95094e0f216fc735705f47b94c2ddcb0962a"
+  }
+}

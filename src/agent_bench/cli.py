@@ -43,6 +43,8 @@ from agent_bench.opencode import (
     load_opencode_profile,
 )
 from agent_bench.opencode_run import execute_controlled_opencode_run
+from agent_bench.pi import PiError, inspect_pi_toolchain, load_pi_profile
+from agent_bench.pi_run import execute_controlled_pi_run
 from agent_bench.preservation import (
     PreservationError,
     restore_artifact,
@@ -85,6 +87,11 @@ opencode_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(opencode_app, name="opencode")
+pi_app = typer.Typer(
+    help="Inspect or run the pinned M7 Pi integration.",
+    no_args_is_help=True,
+)
+app.add_typer(pi_app, name="pi")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -477,6 +484,54 @@ def opencode_run(
         f"metrics_artifact={controlled.metrics.root}\n"
         f"termination={controlled.metrics.metrics.termination.termination_class}"
     )
+
+
+@pi_app.command("inspect")
+def pi_inspect() -> None:
+    """Verify the pinned Pi/Node toolchain and controlled profile."""
+    try:
+        profile = load_pi_profile()
+        inspect_pi_toolchain(profile.toolchain)
+    except PiError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"profile_id={profile.profile_id}\n"
+        f"profile_digest={profile.definition_digest}\n"
+        f"models_sha256={profile.models_sha256}\n"
+        f"node={profile.toolchain.node.path}\n"
+        f"node_version={profile.toolchain.node.version}\n"
+        f"node_sha256={profile.toolchain.node.sha256}\n"
+        f"entrypoint={profile.toolchain.entrypoint_path}\n"
+        f"entrypoint_sha256={profile.toolchain.entrypoint_sha256}\n"
+        f"pi_version={profile.toolchain.version_output}\n"
+        f"node_modules_tree_sha256={profile.toolchain.node_modules_tree_sha256}\n"
+        "pinned_identity_match=true"
+    )
+
+
+@pi_app.command("run")
+def pi_run(experiment_path: Path, run_id: str, output_root: Path) -> None:
+    """Execute exactly one selected Pi run with the fixed M5 backend."""
+    experiment = _load_or_exit(experiment_path)
+    run_definition = next((run for run in expand_experiment(experiment) if run.run_id == run_id), None)
+    if run_definition is None:
+        typer.echo(f"Error: run ID is not in the expanded experiment: {run_id}", err=True)
+        raise typer.Exit(code=1)
+    if run_definition.harness_id != "pi" or run_definition.profile_id != "pi-default-v1":
+        typer.echo("Error: M7 supports only Pi profile pi-default-v1", err=True)
+        raise typer.Exit(code=1)
+    prompt = next(item for item in experiment.prompts if item.prompt_id == run_definition.prompt_id)
+    try:
+        controlled = execute_controlled_pi_run(run_definition=run_definition, prompt_content=prompt.content, output_root=output_root)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if controlled.failed_run is not None:
+        typer.echo(f"preflight=failed\nfailure_class={controlled.failed_run.manifest.failure_class}\nevidence={controlled.failed_run.root}", err=True)
+        raise typer.Exit(code=1)
+    assert controlled.run is not None and controlled.metrics is not None
+    typer.echo(f"run_id={controlled.run.run_manifest.run_id}\noutcome={controlled.run.run_manifest.observed_execution_outcome}\nartifact={controlled.run.artifact_path}\nmetrics_artifact={controlled.metrics.root}\ntermination={controlled.metrics.metrics.termination.termination_class}")
 
 
 @app.command("fake-run")
