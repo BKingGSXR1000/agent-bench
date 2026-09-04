@@ -1,6 +1,6 @@
 # Agent Bench Persisted Data Model
 
-Status: Milestone M0 logical model with M1–M5 concrete subsets
+Status: Milestone M0 logical model with M1–M6 concrete subsets
 Specification version: 1.0.0
 
 ## 1. Conventions
@@ -254,9 +254,11 @@ Expansion must never reuse a run ID or overwrite an existing destination.
 The authoritative index for one realized run.
 
 M3 implements the execution-linked subset described in `EVENTS_AND_RUNS.md`.
-Its `execution_complete` record and sealed M2 artifact together provide the
-implemented evidence; backend, hardware, metric, and full sealing fields remain
-unavailable until their owning milestones rather than being fabricated.
+M6 extends that same schema-compatible record with the exact prompt artifact,
+harness evidence paths, proxy endpoint, intended run/server seed, OpenCode
+capabilities, and native session evidence. The adjacent sealed M2 artifact,
+backend records, and separate M4 metrics artifact remain authoritative for their
+respective layers.
 
 Required fields:
 
@@ -311,7 +313,8 @@ from `RunManifest`. Each named observation uses exactly one method:
 `api_exact`, `proxy_exact`, `harness_exact`, `reconstructed`, or `unavailable`.
 Fields cover raw requests/responses, request parameters, input/output/reasoning
 tokens, context, reasoning content, finish reason, tools/results, compaction,
-serialized-history validation, and empty historical think-block detection.
+session identity, serialized-history validation, and empty historical
+think-block detection.
 Notes qualify conditional API exposure. An unavailable capability is never
 upgraded merely because one run happens to contain a similarly named field.
 The field is optional only for backward compatibility with pre-M5 run

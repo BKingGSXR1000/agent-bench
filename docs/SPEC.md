@@ -44,10 +44,10 @@ Benchmark v1 does not:
 - rely on a Git diff as the sole preservation mechanism; or
 - introduce DuckDB, Parquet, a web service, charts, HTML reports, or execution machinery in M0.
 
-OpenCode/Pi/Hermes adapters, full real-run integration, manual-review UI, and
-rendered reports remain later milestones. M2-M5 now provide worktree/result
-preservation, fake execution, metrics, the fixed llama.cpp lifecycle boundary,
-and transparent proxy capture.
+Pi/Hermes adapters, manual-review UI, and rendered reports remain later
+milestones. M2-M6 now provide worktree/result preservation, fake execution,
+metrics, the fixed llama.cpp lifecycle/capture boundary, and one controlled
+OpenCode adapter with real-run verification.
 
 ## 3. Fixed benchmark-v1 environment
 
@@ -80,9 +80,9 @@ The architecture has six boundaries:
 
 M0 created the package skeleton and these contracts. M1 implemented definition
 and matrix expansion, M2 the Git-isolation/preservation boundary, M3 common
-events and a fake-backed lifecycle, M4 deterministic metrics, and M5 the fixed
+events and a fake-backed lifecycle, M4 deterministic metrics, M5 the fixed
 backend profile, preflight, capture proxy/capabilities, and early-failure
-evidence. Real harness adapters and full real-run integration begin at M6.
+evidence, and M6 the controlled OpenCode boundary.
 
 ## 5. Experiment definitions
 
@@ -244,10 +244,10 @@ Cross-run comparisons support individual overlays, request-index alignment, norm
 ## 16. Incremental implementation boundary
 
 M0 consisted only of this specification set, package metadata, an importable
-package, a version/help-only CLI placeholder, and smoke tests. M1 through M4 now
-implement definitions/matrix expansion, Git preservation, and the FakeHarness
-single-run path, plus separate immutable deterministic metrics artifacts.
-Real harnesses, a backend/proxy, and reports remain outside the implemented
-boundary. `METRICS_ENGINE.md` defines the implemented M4 boundary.
+package, a version/help-only CLI placeholder, and smoke tests. M1 through M6 now
+implement definitions/matrix expansion, Git preservation, the FakeHarness path,
+immutable metrics artifacts, the fixed backend/proxy, and one controlled
+OpenCode adapter. Pi, Hermes, reports, and analytical storage remain outside the
+implemented boundary. `OPENCODE.md` defines the implemented M6 boundary.
 
 Subsequent milestones must select a small coherent portion of this contract, inspect current code, implement it with deterministic fake-backed tests, and stop at that milestone boundary.

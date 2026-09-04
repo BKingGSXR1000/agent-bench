@@ -136,6 +136,8 @@ def test_non_streaming_proxy_preserves_semantics_and_captures_exact_fields(
         "min_p": 0.0,
         "seed": 1001,
         "max_completion_tokens": 4000,
+        "tools": [{"type": "function", "function": {"name": "read_file"}}],
+        "tool_choice": "auto",
         "stream": False,
     }
     request_body = json.dumps(request, separators=(",", ":")).encode()
@@ -151,6 +153,10 @@ def test_non_streaming_proxy_preserves_semantics_and_captures_exact_fields(
     assert base64.b64decode(request_event.payload["body_base64"]) == request_body
     assert request_event.payload["headers"]["Authorization"] == "[REDACTED]"  # type: ignore[index]
     assert request_event.payload["observed_parameters"]["max_completion_tokens"] == 4000  # type: ignore[index]
+    assert request_event.payload["observed_parameters"]["model"] == "qwen"  # type: ignore[index]
+    assert request_event.payload["observed_parameters"]["stream"] is False  # type: ignore[index]
+    assert request_event.payload["observed_parameters"]["tool_choice"] == "auto"  # type: ignore[index]
+    assert request_event.payload["observed_parameters"]["tools"] == request["tools"]  # type: ignore[index]
     assert request_event.payload["parameter_mismatches"] == []
     response_event = next(event for event in events if event.event_type == "llm_response")
     assert base64.b64decode(response_event.payload["body_base64"]) == response_body

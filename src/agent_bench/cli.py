@@ -37,6 +37,12 @@ from agent_bench.metrics_storage import (
     verify_metrics_artifact,
 )
 from agent_bench.models import ExperimentDefinition, Identifier
+from agent_bench.opencode import (
+    OpenCodeError,
+    inspect_opencode_executable,
+    load_opencode_profile,
+)
+from agent_bench.opencode_run import execute_controlled_opencode_run
 from agent_bench.preservation import (
     PreservationError,
     restore_artifact,
@@ -74,6 +80,11 @@ backend_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(backend_app, name="backend")
+opencode_app = typer.Typer(
+    help="Inspect or run the pinned M6 OpenCode integration.",
+    no_args_is_help=True,
+)
+app.add_typer(opencode_app, name="opencode")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -391,6 +402,81 @@ def backend_probe(
         if owned is not None and owned.process.poll() is None:
             code, method = owned.shutdown(profile.shutdown_grace_seconds)
             typer.echo(f"shutdown={method}\nexit_code={code}")
+
+
+@opencode_app.command("inspect")
+def opencode_inspect() -> None:
+    """Inspect the pinned executable and controlled profile without running a task."""
+    try:
+        profile = load_opencode_profile()
+        observed = inspect_opencode_executable(profile.executable.path)
+    except OpenCodeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    matches = observed == profile.executable
+    typer.echo(
+        f"profile_id={profile.profile_id}\n"
+        f"profile_digest={profile.definition_digest}\n"
+        f"config_sha256={profile.config_sha256}\n"
+        f"executable={observed.path}\n"
+        f"version={observed.version}\n"
+        f"executable_sha256={observed.sha256}\n"
+        f"runtime_identity={observed.runtime_identity}\n"
+        f"pinned_identity_match={str(matches).lower()}"
+    )
+    if not matches:
+        raise typer.Exit(code=1)
+
+
+@opencode_app.command("run")
+def opencode_run(
+    experiment_path: Path,
+    run_id: str,
+    output_root: Path,
+) -> None:
+    """Execute exactly one selected OpenCode run with the fixed M5 backend."""
+    experiment = _load_or_exit(experiment_path)
+    run_definition = next(
+        (run for run in expand_experiment(experiment) if run.run_id == run_id),
+        None,
+    )
+    if run_definition is None:
+        typer.echo(f"Error: run ID is not in the expanded experiment: {run_id}", err=True)
+        raise typer.Exit(code=1)
+    if run_definition.harness_id != "opencode":
+        typer.echo("Error: selected run is not an OpenCode run", err=True)
+        raise typer.Exit(code=1)
+    if run_definition.profile_id != "opencode-default-v1":
+        typer.echo("Error: M6 supports only profile opencode-default-v1", err=True)
+        raise typer.Exit(code=1)
+    prompt = next(
+        item for item in experiment.prompts if item.prompt_id == run_definition.prompt_id
+    )
+    try:
+        controlled = execute_controlled_opencode_run(
+            run_definition=run_definition,
+            prompt_content=prompt.content,
+            output_root=output_root,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if controlled.failed_run is not None:
+        typer.echo(
+            f"preflight=failed\n"
+            f"failure_class={controlled.failed_run.manifest.failure_class}\n"
+            f"evidence={controlled.failed_run.root}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    assert controlled.run is not None and controlled.metrics is not None
+    typer.echo(
+        f"run_id={controlled.run.run_manifest.run_id}\n"
+        f"outcome={controlled.run.run_manifest.observed_execution_outcome}\n"
+        f"artifact={controlled.run.artifact_path}\n"
+        f"metrics_artifact={controlled.metrics.root}\n"
+        f"termination={controlled.metrics.metrics.termination.termination_class}"
+    )
 
 
 @app.command("fake-run")

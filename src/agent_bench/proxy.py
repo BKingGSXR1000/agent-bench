@@ -14,7 +14,7 @@ from typing import Any
 
 from agent_bench.backend import SamplingBaseline
 from agent_bench.capture import detect_empty_historical_think_blocks
-from agent_bench.events import RawEventWriter
+from agent_bench.harness import EventSink
 
 _SECRET_HEADER_NAMES = {
     "authorization",
@@ -45,6 +45,7 @@ _HOP_BY_HOP = {
     "upgrade",
 }
 _GENERATION_PARAMETERS = (
+    "model",
     "temperature",
     "top_k",
     "top_p",
@@ -55,6 +56,9 @@ _GENERATION_PARAMETERS = (
     "reasoning_effort",
     "reasoning_budget",
     "stop",
+    "tools",
+    "tool_choice",
+    "stream",
 )
 
 
@@ -87,7 +91,7 @@ class LoggingProxy:
         *,
         upstream: ProxyAddress,
         bind: ProxyAddress,
-        events: RawEventWriter,
+        events: EventSink,
         sampling_baseline: SamplingBaseline,
         intended_seed: int,
         configured_max_context_tokens: int,
@@ -143,7 +147,7 @@ class LoggingProxy:
 @dataclass
 class _ProxyState:
     upstream: ProxyAddress
-    events: RawEventWriter
+    events: EventSink
     sampling_baseline: SamplingBaseline
     intended_seed: int
     configured_max_context_tokens: int

@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -172,10 +173,12 @@ class NormalizedEvent(BaseModel):
     timestamp_utc: datetime
     elapsed_seconds: float | None = Field(default=None, ge=0)
     elapsed_ns: int | None = Field(default=None, ge=0)
-    clock_source: Literal["runner_monotonic"] = "runner_monotonic"
+    clock_source: Literal["runner_monotonic", "harness_wall_clock"] = (
+        "runner_monotonic"
+    )
     raw_event_refs: tuple[RawEventReference, ...] = Field(min_length=1)
-    normalizer_name: Literal["agent-bench-common"] = NORMALIZER_NAME
-    normalizer_version: Literal["1.0.0"] = NORMALIZER_VERSION
+    normalizer_name: str = Field(default=NORMALIZER_NAME, min_length=1)
+    normalizer_version: str = Field(default=NORMALIZER_VERSION, min_length=1)
     normalizer_configuration_digest: Sha256 = NORMALIZER_CONFIGURATION_DIGEST
     confidence: Confidence
     payload: JsonMapping = Field(default_factory=dict)
@@ -241,6 +244,15 @@ class RawEventWriter:
         self._sequence = 0
         self._closed = False
         self._lock = threading.Lock()
+
+    def reset_task_start(self, task_start_ns: int) -> None:
+        """Set the timing origin before the first event is appended."""
+        with self._lock:
+            if self._closed or self._sequence:
+                raise EventStorageError(
+                    "task timing origin can only be reset before the first event"
+                )
+            self.task_start_ns = task_start_ns
 
     def emit(
         self,
@@ -315,7 +327,32 @@ def load_normalized_events(path: Path) -> tuple[NormalizedEvent, ...]:
     return records
 
 
-def normalize_raw_events(raw_path: Path, normalized_path: Path) -> tuple[NormalizedEvent, ...]:
+@dataclass(frozen=True)
+class DerivedEvent:
+    """One normalized event deterministically derived from one raw record."""
+
+    event_kind: EventKind
+    payload: JsonMapping
+    confidence: Confidence = "direct"
+    timestamp_utc: datetime | None = None
+    elapsed_ns: int | None = None
+    clock_source: Literal["runner_monotonic", "harness_wall_clock"] = (
+        "runner_monotonic"
+    )
+
+
+RawEventTransformer = Callable[[RawEvent], tuple[DerivedEvent, ...]]
+
+
+def normalize_raw_events(
+    raw_path: Path,
+    normalized_path: Path,
+    *,
+    transformer: RawEventTransformer | None = None,
+    normalizer_name: str = NORMALIZER_NAME,
+    normalizer_version: str = NORMALIZER_VERSION,
+    normalizer_configuration_digest: str = NORMALIZER_CONFIGURATION_DIGEST,
+) -> tuple[NormalizedEvent, ...]:
     """Deterministically normalize supported raw records into a new JSONL file."""
     raw_events = load_raw_events(raw_path)
     destination = normalized_path.expanduser().resolve()
@@ -323,30 +360,48 @@ def normalize_raw_events(raw_path: Path, normalized_path: Path) -> tuple[Normali
     normalized: list[NormalizedEvent] = []
     with destination.open("xb") as stream:
         for raw_event in raw_events:
-            event_kind = _NORMALIZED_EVENT_TYPES.get(raw_event.event_type)
-            if event_kind is None:
-                continue
-            sequence = len(normalized) + 1
-            event = NormalizedEvent.create(
-                event_id=f"{raw_event.run_id}:normalized:{sequence:06d}",
-                run_id=raw_event.run_id,
-                event_kind=event_kind,
-                sequence=sequence,
-                timestamp_utc=raw_event.timestamp_utc,
-                elapsed_seconds=raw_event.elapsed_seconds,
-                elapsed_ns=raw_event.elapsed_ns,
-                raw_event_refs=(
-                    RawEventReference(
-                        raw_event_id=raw_event.raw_event_id,
-                        raw_sequence=raw_event.sequence,
-                        raw_record_digest=raw_event.record_digest,
+            if transformer is None:
+                event_kind = _NORMALIZED_EVENT_TYPES.get(raw_event.event_type)
+                derived = (
+                    DerivedEvent(event_kind=event_kind, payload=raw_event.payload),
+                ) if event_kind is not None else ()
+            else:
+                derived = transformer(raw_event)
+            for item in derived:
+                sequence = len(normalized) + 1
+                elapsed_ns = (
+                    raw_event.elapsed_ns
+                    if item.timestamp_utc is None and item.elapsed_ns is None
+                    else item.elapsed_ns
+                )
+                event = NormalizedEvent.create(
+                    event_id=f"{raw_event.run_id}:normalized:{sequence:06d}",
+                    run_id=raw_event.run_id,
+                    event_kind=item.event_kind,
+                    sequence=sequence,
+                    timestamp_utc=item.timestamp_utc or raw_event.timestamp_utc,
+                    elapsed_seconds=(
+                        elapsed_ns / 1_000_000_000
+                        if elapsed_ns is not None
+                        else None
                     ),
-                ),
-                confidence="direct",
-                payload=raw_event.payload,
-            )
-            stream.write(_json_line(event))
-            normalized.append(event)
+                    elapsed_ns=elapsed_ns,
+                    clock_source=item.clock_source,
+                    raw_event_refs=(
+                        RawEventReference(
+                            raw_event_id=raw_event.raw_event_id,
+                            raw_sequence=raw_event.sequence,
+                            raw_record_digest=raw_event.record_digest,
+                        ),
+                    ),
+                    normalizer_name=normalizer_name,
+                    normalizer_version=normalizer_version,
+                    normalizer_configuration_digest=normalizer_configuration_digest,
+                    confidence=item.confidence,
+                    payload=item.payload,
+                )
+                stream.write(_json_line(event))
+                normalized.append(event)
         stream.flush()
         os.fsync(stream.fileno())
     return tuple(normalized)

@@ -1,6 +1,6 @@
 # Common Events and Fake Run Lifecycle
 
-Status: Milestone M3 implemented contract  
+Status: Milestone M3 common contract with M5–M6 extensions
 Schema version: 1.0.0
 
 ## 1. Scope
@@ -202,3 +202,19 @@ raw records for safe upstream request evidence, streamed chunks, empty-think
 validation, and backend errors. Unrecognized auxiliary records remain preserved
 raw. Exact API `prompt_tokens` on a correlated response can supply the request's
 context count to M4; no heuristic token estimate is introduced.
+
+## 12. M6 OpenCode boundary
+
+M6 adds a process-backed OpenCode adapter without changing the common metric
+contract. The task service starts the proxy before `task_start`; task timing
+begins immediately before `run_start` and prompt submission, after backend
+readiness and proxy binding. The service stops proxy/backend after `run_end` but
+before raw sealing, so shutdown evidence can be captured while backend startup
+remains excluded from task wall time.
+
+The adapter retains official OpenCode JSON, stderr, session export, invocation,
+result, and all regular isolated XDG config/cache/data/state files. Its
+normalizer maps native reasoning and completed/error tool parts, uses the native
+millisecond timestamps with `clock_source = harness_wall_clock`, and keeps raw
+references. Worktree-contained absolute paths become relative; external paths
+do not. OpenCode-specific behavior is defined in `OPENCODE.md`.

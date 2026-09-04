@@ -58,6 +58,8 @@ class HarnessRunContext:
     events: EventSink
     limits: RunLimits
     cancellation: threading.Event
+    proxy_endpoint: str | None = None
+    run_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,10 @@ class HarnessExecutionResult:
 
     completed_normally: bool
     output_truncated: bool = False
+    exit_code: int | None = None
+    termination_signal: int | None = None
+    session_id: str | None = None
+    evidence_files: tuple[tuple[str, Path], ...] = ()
 
 
 class HarnessAdapter(Protocol):
@@ -78,3 +84,11 @@ class HarnessAdapter(Protocol):
     def adapter_version(self) -> str: ...
 
     def run(self, context: HarnessRunContext) -> HarnessExecutionResult: ...
+
+
+class RunTaskService(Protocol):
+    """Optional generic service whose lifetime surrounds only harness execution."""
+
+    def start(self, events: EventSink) -> None: ...
+
+    def stop(self, events: EventSink) -> tuple[tuple[str, Path], ...]: ...

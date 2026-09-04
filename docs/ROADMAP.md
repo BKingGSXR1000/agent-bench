@@ -124,6 +124,8 @@ The proxy must not intentionally alter requests or responses.
 
 ## M6 — OpenCode adapter
 
+Status: completed
+
 Implement controlled OpenCode execution:
 - isolated HOME/XDG/state
 - clean versioned default profile

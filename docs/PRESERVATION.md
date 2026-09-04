@@ -1,6 +1,6 @@
 # Git Isolation and Result Preservation
 
-Status: Milestone M2 implemented contract  
+Status: Milestone M2 implemented contract with M3–M6 supplemental evidence
 Schema version: 1.0.0
 
 ## 1. Scope
@@ -24,6 +24,9 @@ M5 adds a separate `runs/<run-id>/failure/` evidence path for preflight,
 backend-start, and readiness failures that occur before the normal M2 result
 topology can validly exist. It is not a successful `ArtifactManifest`; its
 exclusive creation and checksum contract are specified in `DATA_MODEL.md`.
+M6 adds the exact prompt, native OpenCode/proxy/backend streams, copied profile
+and isolated OpenCode state, resolved invocations, lifecycle evidence, and
+session export as checksummed supplemental files in an ordinary sealed result.
 
 ## 2. Baseline and worktree safety
 
@@ -119,6 +122,13 @@ Later milestones may add non-reserved supplemental paths before sealing. M3 adds
 harness-state record. Supplemental files cannot replace `manifest.json`,
 `checksums.sha256`, or anything under the M2-owned `source/`, `git/`, or `build/`
 roots.
+
+An M6 OpenCode result additionally includes `run/prompt.txt`,
+`raw/opencode/`, `raw/backend/`, `run/backend/`, `run/harness-state/opencode/`,
+and copied `run/opencode/{home,config,cache,data,state}/` files. The manifest lists
+every regular harness evidence file. Temporary worktree and isolation roots are
+removed only after the sealed artifact and pinned result ref verify; the copied
+evidence remains independently available.
 
 The versioned manifest records the run and experiment IDs, baseline repository
 and commit, result commit and ref, snapshot and diff paths and SHA256 values,

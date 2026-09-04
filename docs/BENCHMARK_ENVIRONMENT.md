@@ -1,6 +1,6 @@
 # Agent Bench v1 Fixed Environment
 
-Status: Milestone M5 implemented contract
+Status: Milestone M5 fixed environment with M6 OpenCode verification
 Environment definition version: 1.0.0
 
 The machine-readable deployment profile is `environment/backend-v1.yaml`. Its
@@ -173,11 +173,11 @@ The deterministic empty-think validator counts only closed, whitespace-only
 `<think>...</think>` blocks in supplied historical message or rendered-prompt
 evidence; an open active-generation prefix cannot match. M5 records the
 request-message observation and provides rendered-prompt fixtures, but the proxy
-cannot see llama.cpp's post-Jinja rendered prompt. Accordingly, real-harness
-serialized-prompt validation and the expected
-`empty_think_blocks_in_history = 0` assertion remain explicitly unavailable and
-pending M6-M8 capture evidence. M5 does not fabricate a successful runtime
-validation.
+cannot see llama.cpp's post-Jinja rendered prompt. Accordingly, M6's real
+OpenCode run validates `empty_think_blocks_in_history = 0` only over captured
+request messages. The stronger post-Jinja rendered-prompt assertion remains
+unavailable pending a boundary that exposes those bytes. Neither M5 nor M6
+fabricates that unavailable evidence.
 
 ## Failed-run evidence
 
@@ -221,3 +221,20 @@ This was an M5 component integration diagnostic: it exercised M4's deterministic
 token/context calculation on normalized real proxy events, but it was not a
 sealed normal benchmark run and did not execute a harness. Full lifecycle
 integration remains correctly assigned to M6.
+
+## M6 OpenCode integration verification
+
+On 2026-09-04, the single controlled run `m6-opencode-real-r001` started a fresh
+owned backend from this profile, routed OpenCode 1.18.25 through the proxy, made
+the requested one-line edit in an isolated worktree, preserved a sealed complete
+source result, and emitted a separate sealed M4 metrics artifact. The backend
+reached readiness in 4.400533378 seconds and shut down through owned TERM with
+exit code zero. All five real LLM requests were streaming; their exact API usage
+produced 31,726 input tokens, 426 output tokens, and a peak context of 7,997 out
+of 107,520. No reasoning-token count or compaction event was exposed.
+
+All five proxy request-history checks found zero empty historical think blocks.
+Requests 3–5 carried one, two, and three non-empty historical assistant
+`reasoning_content` values respectively. Post-Jinja rendering remains
+unavailable. Exact OpenCode behavior, the observed positional-prompt deviation,
+and the corrected stdin policy are recorded in `OPENCODE.md`.

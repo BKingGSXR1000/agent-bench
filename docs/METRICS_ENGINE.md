@@ -157,7 +157,7 @@ agent-bench metrics show RUN_OR_METRICS_ARTIFACT
 analysis artifact. `show` validates and prints an existing metrics artifact, or
 calculates in memory from a sealed run artifact without writing it.
 
-## 8. M5 integration and deferred work
+## 8. M5/M6 integration and deferred work
 
 M5 supplies exact proxy request/response capture and capability declarations.
 When request-side context tokens are absent, a correlated response's exact API
@@ -165,5 +165,12 @@ When request-side context tokens are absent, a correlated response's exact API
 API usage, reasoning-token detail, compaction, or harness tool-execution evidence
 remains unavailable; no tokenizer estimate was added.
 
-Real harness adapters, report rendering, charts, cross-run interpolation,
-Parquet, DuckDB, and qualitative analysis remain deferred.
+M6's OpenCode normalizer supplies harness-exact paired tool starts/ends and
+categories from completed/error native tool parts. API usage supplies exact
+per-request context and output counts. OpenCode does not expose reasoning-token
+counts or complete compaction events, so those metrics remain unavailable.
+Its automatic title request is an observable LLM request and is included rather
+than silently removed.
+
+Pi/Hermes adapters, report rendering, charts, cross-run interpolation, Parquet,
+DuckDB, and qualitative analysis remain deferred.

@@ -1,6 +1,6 @@
 # Agent Bench Reproducibility Contract
 
-Status: Milestone M5 fixed-backend implementation contract
+Status: Milestone M6 fixed-backend and OpenCode implementation contract
 Specification version: 1.0.0
 
 ## 1. Reproducibility objective
@@ -168,6 +168,15 @@ Every run creates new directories that did not exist for any earlier run. At min
 The selected immutable profile is copied into this environment and its copied digest is verified. The source profile is read-only and never modified. No personal home/config fallback is permitted. Harness invocation receives a fresh session identifier and must not resume, import, or discover an earlier session.
 
 The manifest records artifact-relative mappings and, in a restricted host-only record when necessary, resolved absolute paths. Temporary isolation data is removed only after result preservation is sealed and checksums pass.
+
+For OpenCode 1.18.25, the versioned `opencode-default-v1` profile is copied to
+`$XDG_CONFIG_HOME/opencode/opencode.json`; all five HOME/XDG locations and
+harness state are fresh. The executable is invoked with `--pure`, official JSON
+output, thinking visibility, non-interactive auto approval, the fixed model, and
+the isolated worktree. Prompt bytes are supplied through stdin because this
+version's positional-message path adds literal quote characters around arguments
+containing spaces. Native stdout/stderr, the session export, copied XDG state,
+and the complete allowlisted environment are preserved. See `OPENCODE.md`.
 
 ## 9. Environment-variable allowlisting
 

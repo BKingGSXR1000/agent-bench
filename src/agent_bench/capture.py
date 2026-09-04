@@ -36,6 +36,7 @@ class CaptureCapabilities(PersistedModel):
     tool_calls: CaptureMethod
     tool_results: CaptureMethod
     compaction_events: CaptureMethod
+    session_identity: CaptureMethod = "unavailable"
     serialized_prompt_history_validation: CaptureMethod
     empty_historical_think_block_detection: CaptureMethod
     notes: tuple[str, ...] = ()
@@ -65,6 +66,7 @@ def fixed_proxy_capture_capabilities() -> CaptureCapabilities:
         tool_calls="proxy_exact",
         tool_results="proxy_exact",
         compaction_events="unavailable",
+        session_identity="unavailable",
         serialized_prompt_history_validation="unavailable",
         empty_historical_think_block_detection="unavailable",
         notes=(
@@ -93,6 +95,7 @@ def fake_harness_capture_capabilities() -> CaptureCapabilities:
         tool_calls="harness_exact",
         tool_results="harness_exact",
         compaction_events="harness_exact",
+        session_identity="harness_exact",
         serialized_prompt_history_validation="unavailable",
         empty_historical_think_block_detection="unavailable",
         notes=("Synthetic fixture observations are exact only within FakeHarness.",),

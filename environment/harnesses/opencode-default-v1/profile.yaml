@@ -1,0 +1,28 @@
+schema_version: 1.0.0
+profile_id: opencode-default-v1
+profile_version: 1.0.1
+config_file: opencode.json
+config_sha256: ef4c1a16e4d50a1f747c14728740dc23bb578b58fec6bd32aa06e2af68a533a4
+proxy_base_url: http://127.0.0.1:18081/v1
+provider_id: agent-bench
+model_id: qwen3.8-27b
+executable:
+  path: /home/bking/.opencode/bin/opencode
+  size_bytes: 184682624
+  sha256: d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb
+  version: 1.18.25
+  runtime_identity: self-contained Bun ELF; @opencode-ai/sdk 1.18.19; @opencode-ai/plugin 1.18.19
+invocation:
+  pure: true
+  format: json
+  thinking: true
+  auto_approve: true
+  prompt_delivery: stdin_exact_utf8
+deviations:
+  - Registers one OpenAI-compatible provider pointed at the Agent Bench proxy.
+  - Selects the fixed Qwen benchmark model for both primary and small-model work.
+  - Disables automatic updates to retain the pinned executable identity.
+  - Disables session sharing so benchmark evidence is not published externally.
+  - Declares an empty external-plugin list and invokes OpenCode with --pure.
+  - Uses --auto because the installed non-interactive runner otherwise rejects permission requests.
+  - Uses --thinking solely to expose completed reasoning parts in native JSON stdout; OpenCode 1.18.25 does not pass this display flag into the model request.

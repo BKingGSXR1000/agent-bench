@@ -39,6 +39,7 @@ from agent_bench.harness import (
     HarnessExecutionResult,
     HarnessRunContext,
     HarnessRunPaths,
+    RunTaskService,
 )
 from agent_bench.models import Identifier, RunDefinition, Sha256, canonical_sha256
 from agent_bench.preservation import (
@@ -52,6 +53,7 @@ RAW_EVENTS_PATH = "raw/events.jsonl"
 NORMALIZED_EVENTS_PATH = "normalized/events.jsonl"
 RUN_MANIFEST_PATH = "run/manifest.json"
 HARNESS_STATE_PATH = "run/harness-state/session.json"
+PROMPT_PATH = "run/prompt.txt"
 
 ExecutionOutcome = Literal[
     "success",
@@ -130,6 +132,7 @@ class RunManifest(BaseModel):
     profile_id: Identifier
     prompt_id: Identifier
     prompt_sha256: Sha256
+    prompt_path: Literal["run/prompt.txt"] = PROMPT_PATH
     adapter_id: str = Field(min_length=1)
     adapter_version: str = Field(min_length=1)
     adapter_scenario: str | None = None
@@ -149,6 +152,9 @@ class RunManifest(BaseModel):
     task_elapsed_ns: int = Field(ge=0)
     observed_execution_outcome: ExecutionOutcome
     terminal_raw_event_ids: tuple[str, ...] = Field(min_length=1)
+    harness_evidence_paths: tuple[str, ...] = ()
+    proxy_endpoint: str | None = None
+    run_seed: int | None = None
     capture_capabilities: CaptureCapabilities | None = None
     record_digest: Sha256
 
@@ -217,6 +223,7 @@ class _RuntimePaths:
     raw_events: Path
     normalized_events: Path
     run_manifest: Path
+    prompt: Path
 
 
 @dataclass
@@ -234,6 +241,9 @@ def execute_run(
     worktrees_root: Path,
     isolation_root: Path,
     adapter_scenario: str | None = None,
+    proxy_endpoint: str | None = None,
+    run_seed: int | None = None,
+    task_service: RunTaskService | None = None,
 ) -> RunExecutionResult:
     """Execute and preserve exactly one adapter-backed benchmark task."""
     prompt_bytes = prompt_content.encode("utf-8")
@@ -265,6 +275,8 @@ def execute_run(
         )
 
     runtime = _create_runtime_paths(isolation_storage, run_definition.run_id)
+    runtime.prompt.parent.mkdir(parents=True, exist_ok=True)
+    runtime.prompt.write_bytes(prompt_bytes)
     worktree: DetachedWorktree | None = None
     try:
         worktree = create_detached_worktree(
@@ -281,7 +293,7 @@ def execute_run(
             xdg_state_home=runtime.xdg_state,
             harness_state=runtime.harness_state,
         )
-        run_manifest = _execute_and_record(
+        run_manifest, adapter_result, service_evidence = _execute_and_record(
             run_definition=run_definition,
             prompt_content=prompt_content,
             adapter=adapter,
@@ -289,6 +301,9 @@ def execute_run(
             worktree=worktree,
             paths=paths,
             runtime=runtime,
+            proxy_endpoint=proxy_endpoint,
+            run_seed=run_seed,
+            task_service=task_service,
         )
         _write_model(runtime.run_manifest, run_manifest)
         artifact_manifest = preserve_worktree(
@@ -300,7 +315,8 @@ def execute_run(
                 RAW_EVENTS_PATH: runtime.raw_events,
                 NORMALIZED_EVENTS_PATH: runtime.normalized_events,
                 RUN_MANIFEST_PATH: runtime.run_manifest,
-                HARNESS_STATE_PATH: runtime.harness_state / "session.json",
+                PROMPT_PATH: runtime.prompt,
+                **_evidence_mapping(runtime, adapter_result, service_evidence),
             },
         )
         verify_artifact(final_artifact, repository=baseline.repository)
@@ -346,16 +362,26 @@ def _execute_and_record(
     worktree: DetachedWorktree,
     paths: HarnessRunPaths,
     runtime: _RuntimePaths,
-) -> RunManifest:
-    task_start_ns = time.monotonic_ns()
+    proxy_endpoint: str | None,
+    run_seed: int | None,
+    task_service: RunTaskService | None,
+) -> tuple[RunManifest, HarnessExecutionResult | None, tuple[tuple[str, Path], ...]]:
     cancellation = threading.Event()
     terminal_events: list[RawEvent] = []
+    adapter_result: HarnessExecutionResult | None = None
+    service_evidence: tuple[tuple[str, Path], ...] = ()
+    service_started = False
+    service_stopped = False
     writer = RawEventWriter(
         runtime.raw_events,
         run_definition.run_id,
-        task_start_ns=task_start_ns,
     )
     try:
+        if task_service is not None:
+            task_service.start(writer)
+            service_started = True
+        task_start_ns = time.monotonic_ns()
+        writer.reset_task_start(task_start_ns)
         start_event = writer.emit(
             source="runner",
             event_type="run_start",
@@ -377,6 +403,8 @@ def _execute_and_record(
             events=writer,
             limits=run_definition.limits,
             cancellation=cancellation,
+            proxy_endpoint=proxy_endpoint,
+            run_seed=run_seed,
         )
         adapter_result, adapter_error, timed_out = _invoke_adapter(
             adapter,
@@ -464,10 +492,24 @@ def _execute_and_record(
             },
         )
         terminal_events.append(end_event)
+        if task_service is not None:
+            service_stopped = True
+            service_evidence = task_service.stop(writer)
     finally:
+        if task_service is not None and service_started and not service_stopped:
+            service_stopped = True
+            try:
+                service_evidence = task_service.stop(writer)
+            except Exception:
+                writer.seal()
+                raise
         writer.seal()
 
-    normalize_raw_events(runtime.raw_events, runtime.normalized_events)
+    adapter_normalizer = getattr(adapter, "normalize_events", None)
+    if callable(adapter_normalizer):
+        adapter_normalizer(runtime.raw_events, runtime.normalized_events)
+    else:
+        normalize_raw_events(runtime.raw_events, runtime.normalized_events)
     isolation_record = IsolationPathsRecord(
         workspace=paths.workspace,
         isolation_root=runtime.root,
@@ -480,7 +522,7 @@ def _execute_and_record(
         raw_events_during_execution=runtime.raw_events,
         normalized_events_during_execution=runtime.normalized_events,
     )
-    return RunManifest.create(
+    manifest = RunManifest.create(
         run_manifest_id=f"{run_definition.run_id}-manifest",
         run_id=run_definition.run_id,
         experiment_id=run_definition.experiment_id,
@@ -503,12 +545,18 @@ def _execute_and_record(
         terminal_raw_event_ids=tuple(
             event.raw_event_id for event in terminal_events
         ),
+        harness_evidence_paths=tuple(
+            sorted(_evidence_mapping(runtime, adapter_result, service_evidence))
+        ),
+        proxy_endpoint=proxy_endpoint,
+        run_seed=run_seed,
         capture_capabilities=(
             fake_harness_capture_capabilities()
             if adapter.adapter_id == "fake-harness"
             else getattr(adapter, "capture_capabilities", None)
         ),
     )
+    return manifest, adapter_result, service_evidence
 
 
 def _invoke_adapter(
@@ -564,7 +612,36 @@ def _create_runtime_paths(root: Path, run_id: str) -> _RuntimePaths:
         raw_events=run_root / RAW_EVENTS_PATH,
         normalized_events=run_root / NORMALIZED_EVENTS_PATH,
         run_manifest=run_root / RUN_MANIFEST_PATH,
+        prompt=run_root / PROMPT_PATH,
     )
+
+
+def _evidence_mapping(
+    runtime: _RuntimePaths,
+    adapter_result: HarnessExecutionResult | None,
+    service_evidence: tuple[tuple[str, Path], ...],
+) -> dict[str, Path]:
+    """Collect generic run-local state plus explicitly named native evidence."""
+    result: dict[str, Path] = {}
+    for source in sorted(runtime.harness_state.rglob("*")):
+        if source.is_file() and not source.is_symlink():
+            relative = source.relative_to(runtime.harness_state).as_posix()
+            result[f"run/harness-state/{relative}"] = source
+    declared = (
+        adapter_result.evidence_files if adapter_result is not None else ()
+    ) + service_evidence
+    for relative, source in declared:
+        candidate = Path(relative)
+        if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
+            raise RunLifecycleError(f"unsafe harness evidence path: {relative}")
+        normalized = candidate.as_posix()
+        existing = result.get(normalized)
+        if existing is not None and existing.resolve() != source.resolve():
+            raise RunLifecycleError(f"duplicate harness evidence path: {normalized}")
+        if not source.is_file() or source.is_symlink():
+            raise RunLifecycleError(f"harness evidence is not a regular file: {source}")
+        result[normalized] = source
+    return result
 
 
 def _write_model(path: Path, model: BaseModel) -> None:
