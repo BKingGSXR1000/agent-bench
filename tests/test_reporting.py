@@ -24,7 +24,12 @@ from agent_bench.reporting import (
     normalized_elapsed_curve,
     quantile_type7,
     verify_report,
+    _ingest,
 )
+from agent_bench.executor import ExperimentState, RunProgress
+from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
+from agent_bench.backend import BackendPreflightReport, PreflightCheck, ResolvedBackendInvocation
+from agent_bench.capture import fixed_proxy_capture_capabilities
 
 
 def _run(*, harness: str, task: str, variant: str, repetition: int, value: float, state: str = "completed", evidence: str = "verified") -> dict[str, object]:
@@ -155,6 +160,38 @@ def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() ->
     assert "Prompt variant" in output and "Repetition" in output
     assert "opencode-task-a-vague-1" in output
     assert "135" in output
+    assert "N/A" not in output
+
+
+def test_failed_run_evidence_is_reported_as_verified_infrastructure_record(tmp_path: Path) -> None:
+    run_id = "hermes-fixture-normal-r001"
+    environment = FailureEnvironmentRecord(
+        run_id=run_id, backend_profile_digest="a" * 64,
+        preflight=BackendPreflightReport(profile_id="fixture", passed=False,
+            primary_failure_class="benchmark_port_in_use", checks=(PreflightCheck(
+                check_id="benchmark-port", passed=False,
+                failure_class="benchmark_port_in_use", message="active listener",
+                evidence={"port": 18080}),)),
+        invocation=ResolvedBackendInvocation(profile_id="fixture", run_seed=1001,
+            executable=Path("/opt/llama-server"), argv=("/opt/llama-server",),
+            working_directory=Path("/opt"), environment={},
+            stdout_artifact="failure/stdout.log", stderr_artifact="failure/stderr.log"),
+        capture_capabilities=fixed_proxy_capture_capabilities(),
+    )
+    preserve_failed_run(runs_root=tmp_path / "runs", run_id=run_id,
+        failure_class="benchmark_port_in_use", reason="active listener", environment=environment)
+    state = ExperimentState(experiment_id="fixture", definition_digest="b" * 64,
+        expansion_digest="c" * 64, ordering={}, runs=[RunProgress(run_id=run_id,
+        execution_index=1, state="failed", failure_domain="infrastructure_precondition",
+        failure_class="benchmark_port_in_use", failure_phase="preflight",
+        harness_execution_started=False, llm_request_observed=False,
+        preservation_completed=True)], updated_at="2026-09-04T00:00:00Z")
+    rows, excluded = _ingest(tmp_path, state, {}, {})
+    assert excluded == []
+    assert rows["runs"][0]["evidence_status"] == "verified_failed_run_evidence"
+    assert rows["runs"][0]["termination_class"] == "benchmark_port_in_use"
+    assert rows["failures"][0]["failure_phase"] == "preflight"
+    assert rows["failures"][0]["harness_execution_started"] is False
 
 
 def test_real_smoke_is_reportable_read_only_when_available(tmp_path: Path) -> None:

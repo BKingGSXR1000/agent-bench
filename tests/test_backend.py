@@ -338,6 +338,34 @@ def test_preflight_classifies_occupied_benchmark_port(tmp_path: Path) -> None:
     assert proxy_check.failure_class == "benchmark_port_in_use"
 
 
+def test_port_failure_short_circuits_before_expensive_identity_hashing(tmp_path: Path) -> None:
+    called: list[Path] = []
+
+    report = preflight_backend(
+        _profile(tmp_path), _paths(tmp_path), run_seed=1001,
+        hash_file=lambda path: (called.append(path) or "0" * 64),
+        run_command=_command, collect_gpus=_gpus,
+        port_is_free=lambda _host, _port: False,
+    )
+
+    assert not report.passed
+    assert [check.check_id for check in report.checks] == [
+        "benchmark-port", "capture-proxy-port",
+    ]
+    assert called == []
+
+
+def test_clean_tcp_close_does_not_look_like_an_active_listener() -> None:
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    assert not is_port_free("127.0.0.1", port)
+    listener.close()
+    assert is_port_free("127.0.0.1", port)
+
+
 def test_backend_endpoint_observation_preserves_exact_slots_body(
     tmp_path: Path,
 ) -> None:

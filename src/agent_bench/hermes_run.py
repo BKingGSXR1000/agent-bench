@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 
 from agent_bench.backend import BackendLifecycleError, BackendPreflightReport, BackendProfile, BackendReadinessFailed, BackendStartFailed, OwnedBackendProcess, load_backend_profile, preflight_backend, resolve_backend_invocation, seed_for_repetition, start_owned_backend
 from agent_bench.failure import FailedRunEvidence, FailureEnvironmentRecord, preserve_failed_run
@@ -28,7 +29,7 @@ class ControlledHermesResult:
     failed_run: FailedRunEvidence | None
 
 
-def execute_controlled_hermes_run(*, run_definition: RunDefinition, prompt_content: str, output_root: Path, backend_profile: BackendProfile | None = None, hermes_profile: HermesProfile | None = None) -> ControlledHermesResult:
+def execute_controlled_hermes_run(*, run_definition: RunDefinition, prompt_content: str, output_root: Path, backend_profile: BackendProfile | None = None, hermes_profile: HermesProfile | None = None, phase_reporter: Callable[[str], None] | None = None) -> ControlledHermesResult:
     """Execute one M8 run or seal immutable pre-task backend failure evidence."""
     if run_definition.harness_id != "hermes": raise ValueError("controlled Hermes execution requires harness_id=hermes")
     output = output_root.expanduser().resolve()
@@ -51,6 +52,8 @@ def execute_controlled_hermes_run(*, run_definition: RunDefinition, prompt_conte
     _write_json(control_root / "profile.json", backend.model_dump(mode="json")); _write_json(control_root / "preflight.json", report.model_dump(mode="json")); _write_json(control_root / "invocation.json", resolve_backend_invocation(backend, backend_paths, run_seed=run_seed).model_dump(mode="json"))
     if not report.passed:
         failed = _preserve_failure(output, run_definition.run_id, backend, backend_paths, report, run_seed); shutil.rmtree(control_root); return ControlledHermesResult(None, None, None, failed)
+    if phase_reporter is not None:
+        phase_reporter("running")
     owned: OwnedBackendProcess | None = None; service: _BackendProxyTaskService | None = None; failure_class = "backend_start_failed"
     try:
         try: owned = start_owned_backend(backend, backend_paths, report, control_root / "stdout.log", control_root / "stderr.log", run_seed=run_seed)
@@ -60,6 +63,8 @@ def execute_controlled_hermes_run(*, run_definition: RunDefinition, prompt_conte
         except BackendReadinessFailed as exc: failure_class = "backend_readiness_failed"; raise BackendLifecycleError(str(exc)) from exc
         service = _BackendProxyTaskService(profile=backend, preflight=report, owned=owned, startup_ns=startup_ns, control_root=control_root, run_seed=run_seed)
         result = execute_run(run_definition=run_definition, prompt_content=prompt_content, adapter=HermesAdapter(harness), artifacts_root=output / "artifacts", worktrees_root=output / "worktrees", isolation_root=output / "runtime" / "harness", proxy_endpoint=harness.proxy_base_url, run_seed=run_seed, task_service=service)
+        if phase_reporter is not None:
+            phase_reporter("analyzing")
         metrics = calculate_run_metrics(result.artifact_path); stored = store_metrics_artifact(source_artifact=result.artifact_path, output_root=output / "analysis", metrics=metrics)
         from agent_bench.context_analysis import derive_context_analysis
         context_analysis = store_context_analysis_artifact(source_artifact=result.artifact_path, output_root=output / "analysis", analysis=derive_context_analysis(result.artifact_path))

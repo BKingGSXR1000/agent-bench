@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -220,3 +221,31 @@ def test_context_usage_reasoning_and_finish_extraction_is_exact_only() -> None:
     assert observed.reasoning_tokens is None
     assert observed.reasoning_content == "r"
     assert observed.finish_reason == "stop"
+
+
+def test_owned_proxy_can_reuse_one_fixed_port_sequentially(tmp_path: Path) -> None:
+    """A clean owned proxy shutdown must not require an arbitrary delay."""
+    upstream, thread = _start_upstream()
+    try:
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        for index in range(8):
+            writer = RawEventWriter(tmp_path / f"raw-{index}.jsonl", f"proxy-{index}")
+            proxy = LoggingProxy(
+                upstream=ProxyAddress("127.0.0.1", upstream.server_address[1]),
+                bind=ProxyAddress("127.0.0.1", port), events=writer,
+                sampling_baseline=SamplingBaseline(), intended_seed=1001,
+                configured_max_context_tokens=107520,
+            )
+            try:
+                proxy.start()
+                assert _request(proxy, "/v1/chat/completions", b'{"messages":[]}')[0] == 200
+            finally:
+                proxy.shutdown()
+                writer.seal()
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=2)

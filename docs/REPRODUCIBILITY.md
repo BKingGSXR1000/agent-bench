@@ -234,6 +234,22 @@ Model load, startup, and readiness durations are measured separately from task w
 
 This policy favors isolation. Any future shared-server mode is a different explicitly named protocol and cannot be mixed into benchmark-v1 comparisons.
 
+Before expensive model verification, preflight checks both fixed loopback ports
+for an active listener. It does not use a plain bind probe: a clean prior
+llama.cpp shutdown can leave TCP cleanup state while the pinned server's
+`SO_REUSEADDR` socket is immediately reusable. An active listener remains a
+hard `benchmark_port_in_use` failure. Agent Bench never uses `SO_REUSEPORT`,
+never waits arbitrarily for a port, and never stops an unowned process.
+
+The sequential executor records `preflight`, `running`, `analyzing`, and (when
+separately observable) `preserving` transitions. It does not emit `running`
+for a controlled run until backend preflight passes. Future state records carry
+failure domain/class/phase plus whether harness execution, LLM traffic, and
+preservation occurred. Within one executor invocation, two consecutive failures
+with the same global infrastructure domain/class trip a recorded circuit
+breaker; unattempted rows remain `pending` rather than being mislabeled as
+failed.
+
 ## 12. Readiness and warmup policy
 
 One versioned readiness policy and one versioned warmup policy are fixed for an experiment.

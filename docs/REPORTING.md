@@ -14,7 +14,11 @@ Every report records its schema/specification version, generator version, input 
 ## 2. General rules
 
 - Values use metric definitions from `METRICS.md` without reinterpreting them.
-- `N/A` remains distinct from zero and carries its machine-readable reason.
+- Every absent value carries one explicit state: `not_executed` (no task was
+  attempted), `not_observed` (the evidence source did not expose it),
+  `not_applicable` (the metric does not apply), `invalid_evidence` (checksums
+  or linkage failed), or `not_recorded` (a legacy evidence surface lacks the
+  field). The dashboard never renders a generic `N/A` or substitutes zero.
 - Counts contributing to every aggregate are displayed.
 - Failed and no-change runs are included by default and visually identified.
 - No missing value is imputed.

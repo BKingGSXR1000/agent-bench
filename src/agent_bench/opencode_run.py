@@ -8,6 +8,7 @@ import socket
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 
 from agent_bench.backend import (
     BackendLifecycleError,
@@ -178,6 +179,7 @@ def execute_controlled_opencode_run(
     output_root: Path,
     backend_profile: BackendProfile | None = None,
     opencode_profile: OpenCodeProfile | None = None,
+    phase_reporter: Callable[[str], None] | None = None,
 ) -> ControlledOpenCodeResult:
     """Execute one M6 run or seal pre-task backend failure evidence."""
     if run_definition.harness_id != "opencode":
@@ -211,6 +213,9 @@ def execute_controlled_opencode_run(
         )
         shutil.rmtree(control_root)
         return ControlledOpenCodeResult(None, None, failed)
+
+    if phase_reporter is not None:
+        phase_reporter("running")
 
     owned: OwnedBackendProcess | None = None
     service: _BackendProxyTaskService | None = None
@@ -253,6 +258,8 @@ def execute_controlled_opencode_run(
             run_seed=run_seed,
             task_service=service,
         )
+        if phase_reporter is not None:
+            phase_reporter("analyzing")
         metrics = calculate_run_metrics(result.artifact_path)
         stored = store_metrics_artifact(
             source_artifact=result.artifact_path,

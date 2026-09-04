@@ -403,6 +403,42 @@ def preflight_backend(
     port_checker = port_is_free or is_port_free
     checks: list[PreflightCheck] = []
 
+    # Port availability is deliberately the first check.  The model hash is
+    # expensive (about 18 GiB) and a live foreign listener is an immediate,
+    # deterministic reason not to do that work.  A clean port does *not*
+    # relax any later identity/GPU checks: a run cannot proceed until every
+    # check below has passed.
+    port_ok = port_checker(profile.server.host, profile.server.port)
+    _add_check(
+        checks,
+        "benchmark-port",
+        port_ok,
+        "benchmark_port_in_use",
+        "benchmark backend port has no active listener"
+        if port_ok else "benchmark backend port has an active listener",
+        {"host": profile.server.host, "port": profile.server.port,
+         "probe": "active_listener_connect"},
+    )
+    proxy_port_ok = port_checker(profile.server.host, profile.server.proxy_port)
+    _add_check(
+        checks,
+        "capture-proxy-port",
+        proxy_port_ok,
+        "benchmark_port_in_use",
+        "benchmark capture-proxy port has no active listener"
+        if proxy_port_ok else "benchmark capture-proxy port has an active listener",
+        {"host": profile.server.host, "port": profile.server.proxy_port,
+         "probe": "active_listener_connect"},
+    )
+    if not port_ok or not proxy_port_ok:
+        failures = [check for check in checks if not check.passed]
+        return BackendPreflightReport(
+            profile_id=profile.profile_id,
+            passed=False,
+            primary_failure_class=failures[0].failure_class,
+            checks=tuple(checks),
+        )
+
     _check_pinned_file(
         checks, "model-file", profile.model, "model_hash_mismatch", hasher
     )
@@ -538,27 +574,6 @@ def preflight_backend(
         "precondition_failed",
         "fresh HOME/XDG paths are valid" if paths_ok else "HOME/XDG paths are invalid",
         {"paths": [str(path) for path in all_paths]},
-    )
-
-    port_ok = port_checker(profile.server.host, profile.server.port)
-    _add_check(
-        checks,
-        "benchmark-port",
-        port_ok,
-        "benchmark_port_in_use",
-        "benchmark backend port is free" if port_ok else "benchmark backend port is occupied",
-        {"host": profile.server.host, "port": profile.server.port},
-    )
-    proxy_port_ok = port_checker(profile.server.host, profile.server.proxy_port)
-    _add_check(
-        checks,
-        "capture-proxy-port",
-        proxy_port_ok,
-        "benchmark_port_in_use",
-        "benchmark capture-proxy port is free"
-        if proxy_port_ok
-        else "benchmark capture-proxy port is occupied",
-        {"host": profile.server.host, "port": profile.server.proxy_port},
     )
 
     try:
@@ -746,13 +761,19 @@ def collect_nvidia_observations(
 
 
 def is_port_free(host: str, port: int) -> bool:
-    """Return whether an exclusive TCP bind succeeds; never disturb occupants."""
+    """Return whether a TCP listener is active, without binding or disturbing it.
+
+    This intentionally answers the benchmark question ("would a foreign or
+    stale server receive traffic on this endpoint?") rather than asking whether
+    a plain test socket may bind.  The latter falsely reports Linux ``TIME_WAIT``
+    as an occupied port after a clean shutdown.  The pinned llama.cpp server
+    sets ``SO_REUSEADDR`` itself, so it can safely rebind after that state; this
+    function never enables ``SO_REUSEPORT`` and never kills or touches a peer.
+    A startup race remains a normal, explicit backend-start failure.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
-        try:
-            candidate.bind((host, port))
-        except OSError:
-            return False
-    return True
+        candidate.settimeout(0.2)
+        return candidate.connect_ex((host, port)) != 0
 
 
 def observe_backend_endpoint(

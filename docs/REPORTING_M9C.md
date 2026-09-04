@@ -30,7 +30,12 @@ artifact, context-analysis-v2 artifact, their cross-links, and M9B's persistent
 result Git ref/tree/ancestry. Timing-provenance-v1 is verified when present.
 An invalid completed row is retained as `evidence_status = invalid`, with its
 reason, rather than silently ingested. Failed, interrupted, invalid, and pending
-matrix rows remain visible even when no normal metrics exist.
+matrix rows remain visible even when no normal metrics exist. Verified
+`FailedRunEvidence` rooted at `<experiment>/runs/<run-id>/failure/` is ingested
+as distinct pre-task/infrastructure evidence, not as a normal run artifact or
+comparative metric input. Pending rows are `not_executed`; missing evidence is
+`not_observed` or `not_recorded` with its explicit reason. The dashboard never
+uses generic `N/A`.
 
 The summary and HTML prominently show `PARTIAL EXPERIMENT — completed / planned`
 until every planned row is terminal and verified. An ordinary harness exit or

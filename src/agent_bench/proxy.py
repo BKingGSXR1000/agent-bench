@@ -165,7 +165,10 @@ class _ProxyState:
 
 class _CaptureServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    # The owned proxy must be reusable immediately after its own clean
+    # shutdown.  This is SO_REUSEADDR, not SO_REUSEPORT: it does not select or
+    # share traffic with an existing listener, which preflight still rejects.
+    allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], state: _ProxyState) -> None:
         self.state = state

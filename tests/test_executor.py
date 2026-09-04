@@ -3,7 +3,7 @@ import hashlib
 from types import SimpleNamespace
 
 from agent_bench.config import load_experiment
-from agent_bench.executor import ExperimentExecutor, load_or_create, status
+from agent_bench.executor import DispatchOutcome, ExperimentExecutor, load_or_create, status
 from agent_bench.matrix import expand_experiment
 from agent_bench.models import PortableBaselineIdentity
 from agent_bench.models import RunDefinition
@@ -29,6 +29,36 @@ def test_executor_failure_continues(tmp_path: Path, experiment_fixture: object) 
         return len(calls) != 1
     state = ExperimentExecutor(experiment, tmp_path / "out", dispatch).run(limit=3)
     assert [r.state for r in state.runs[:3]] == ["failed", "completed", "completed"]
+    assert state.runs[0].failure_domain == "harness_runtime"
+    assert state.runs[0].failure_phase == "running"
+
+
+def test_controlled_lifecycle_does_not_emit_running_before_preflight_and_breaks_repeated_infra_failure(tmp_path: Path, experiment_fixture: object) -> None:
+    experiment = load_experiment(experiment_fixture.path)  # type: ignore[attr-defined]
+
+    class Dispatch:
+        reporter = None
+        def set_phase_reporter(self, reporter):
+            self.reporter = reporter
+        def __call__(self, run, root):
+            assert self.reporter is not None
+            # This is the real-preflight boundary: no running event existed
+            # before this callback.
+            self.reporter("running")
+            return DispatchOutcome(False, "backend endpoint has active listener", "infrastructure_precondition", "benchmark_port_in_use", "preflight", False, False, True)
+
+    root = tmp_path / "out"
+    state = ExperimentExecutor(experiment, root, Dispatch()).run(limit=5)
+    assert [item.state for item in state.runs[:2]] == ["failed", "failed"]
+    assert all(item.state == "pending" for item in state.runs[2:])
+    assert state.circuit_breaker is not None
+    assert state.circuit_breaker["threshold"] == 2
+    events = (root / "executor-events.jsonl").read_text(encoding="utf-8").splitlines()
+    first_run_events = [line for line in events if state.runs[0].run_id in line]
+    assert '"state":"preflight"' in first_run_events[0]
+    assert '"state":"running"' in first_run_events[1]
+    assert state.runs[0].failure_phase == "preflight"
+    assert state.runs[0].harness_execution_started is False
 
 
 def test_resume_marks_completed_run_invalid_when_durable_evidence_is_missing(tmp_path: Path, experiment_fixture: object) -> None:

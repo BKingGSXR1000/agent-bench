@@ -34,6 +34,11 @@ RunState = Literal[
     "failed", "interrupted", "invalid",
 ]
 TERMINAL = {"completed", "failed", "invalid"}
+RunPhase = Literal["preflight", "running", "preserving", "analyzing"]
+FailureDomain = Literal[
+    "infrastructure_precondition", "backend_lifecycle", "proxy_lifecycle",
+    "harness_runtime", "preservation", "analysis", "executor",
+]
 
 
 class ExecutorError(RuntimeError):
@@ -46,21 +51,47 @@ class RunProgress(BaseModel):
     execution_index: int
     state: RunState = "pending"
     detail: str | None = None
+    failure_domain: FailureDomain | None = None
+    failure_class: str | None = None
+    failure_phase: RunPhase | None = None
+    harness_execution_started: bool | None = None
+    llm_request_observed: bool | None = None
+    preservation_completed: bool | None = None
 
 
 class ExperimentState(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0", "1.1.0"] = "1.1.0"
     experiment_id: str
     definition_digest: str
     expansion_digest: str
     ordering: dict[str, object]
     runs: list[RunProgress]
     interrupted: bool = False
+    circuit_breaker: dict[str, object] | None = None
     updated_at: str
 
 
-Dispatch = Callable[[RunDefinition, Path], bool]
+@dataclass(frozen=True)
+class DispatchOutcome:
+    """Structured terminal result for one executor dispatch.
+
+    This is intentionally limited to execution/provenance facts.  It does not
+    turn a task-quality result into an executor failure.
+    """
+
+    passed: bool
+    detail: str | None = None
+    failure_domain: FailureDomain | None = None
+    failure_class: str | None = None
+    failure_phase: RunPhase | None = None
+    harness_execution_started: bool | None = None
+    llm_request_observed: bool | None = None
+    preservation_completed: bool | None = None
+
+
+Dispatch = Callable[[RunDefinition, Path], bool | DispatchOutcome]
+PhaseReporter = Callable[[RunPhase], None]
 
 
 def _now() -> str:
@@ -156,6 +187,7 @@ class ExperimentExecutor:
         state = load_or_create(self.output_root, self.experiment, resume)
         planned = {run.run_id: run for run in self.plan()}
         count = 0
+        consecutive_infrastructure_failure: tuple[FailureDomain, str, int] | None = None
         for progress in state.runs:
             if selected is not None and progress.run_id not in selected:
                 continue
@@ -171,15 +203,40 @@ class ExperimentExecutor:
             if limit is not None and count >= limit:
                 break
             progress.state, progress.detail = "preflight", None
+            progress.failure_domain = progress.failure_class = progress.failure_phase = None
+            progress.harness_execution_started = progress.llm_request_observed = progress.preservation_completed = None
             write_state(self.output_root, state)
             _append_executor_event(self.output_root, progress)
-            progress.state = "running"
-            write_state(self.output_root, state)
-            _append_executor_event(self.output_root, progress)
+
+            def report_phase(phase: RunPhase) -> None:
+                progress.state = phase
+                write_state(self.output_root, state)
+                _append_executor_event(self.output_root, progress)
+
+            reporter_setter = getattr(self.dispatch, "set_phase_reporter", None)
+            controlled_phases = callable(reporter_setter)
+            if controlled_phases:
+                reporter_setter(report_phase)
+            else:
+                # Legacy/fake dispatches have no explicit preflight boundary.
+                # Real controlled dispatches always report it before this state.
+                report_phase("running")
             try:
-                passed = self.dispatch(planned[progress.run_id], self.output_root)
-                progress.state = "completed" if passed else "failed"
-                progress.detail = None if passed else "run-local failure"
+                dispatched = self.dispatch(planned[progress.run_id], self.output_root)
+                outcome = dispatched if isinstance(dispatched, DispatchOutcome) else DispatchOutcome(
+                    passed=dispatched,
+                    detail=None if dispatched else "run-local failure",
+                    failure_domain=None if dispatched else "harness_runtime",
+                    failure_phase=None if dispatched else "running",
+                )
+                progress.state = "completed" if outcome.passed else "failed"
+                progress.detail = outcome.detail
+                progress.failure_domain = outcome.failure_domain
+                progress.failure_class = outcome.failure_class
+                progress.failure_phase = outcome.failure_phase
+                progress.harness_execution_started = outcome.harness_execution_started
+                progress.llm_request_observed = outcome.llm_request_observed
+                progress.preservation_completed = outcome.preservation_completed
             except (KeyboardInterrupt, SystemExit):
                 progress.state, progress.detail = "interrupted", "executor interrupted"
                 state.interrupted = True
@@ -187,42 +244,75 @@ class ExperimentExecutor:
                 _append_executor_event(self.output_root, progress)
                 raise
             except Exception as exc:
+                active_phase = progress.state
                 progress.state = "failed"
                 progress.detail = f"{type(exc).__name__}: {exc}"
+                progress.failure_domain = "executor"
+                progress.failure_class = type(exc).__name__
+                progress.failure_phase = active_phase if active_phase in {"preflight", "running", "preserving", "analyzing"} else "preflight"
+                progress.harness_execution_started = False
+                progress.llm_request_observed = False
+                progress.preservation_completed = False
             write_state(self.output_root, state)
             _append_executor_event(self.output_root, progress)
             count += 1
+            if (
+                progress.state == "failed"
+                and progress.failure_domain in {"infrastructure_precondition", "backend_lifecycle", "proxy_lifecycle"}
+                and progress.failure_class
+            ):
+                key = (progress.failure_domain, progress.failure_class)
+                previous = consecutive_infrastructure_failure
+                consecutive_infrastructure_failure = (
+                    key[0], key[1], (previous[2] + 1 if previous and previous[:2] == key else 1)
+                )
+            else:
+                consecutive_infrastructure_failure = None
+            if _trip_circuit_breaker(state, progress, consecutive_infrastructure_failure):
+                write_state(self.output_root, state)
+                _append_executor_event(self.output_root, progress)
+                break
         return state
 
 
-def controlled_dispatch(experiment: ExperimentDefinition, subject: FrozenSubject) -> Dispatch:
-    """Create M9B dispatch from the existing controlled harness lifecycles."""
-    if experiment.identity_version != "2.0.0" or experiment.portable_baseline != subject.identity:
-        raise ExecutorError("experiment portable_baseline does not match the frozen subject")
-    prompts = {prompt.prompt_id: prompt.content for prompt in experiment.prompts}
+@dataclass
+class _ControlledDispatch:
+    experiment: ExperimentDefinition
+    subject: FrozenSubject
+    prompts: dict[str, str]
+    phase_reporter: PhaseReporter | None = None
 
-    def dispatch(run: RunDefinition, output_root: Path) -> bool:
+    def set_phase_reporter(self, reporter: PhaseReporter) -> None:
+        self.phase_reporter = reporter
+
+    def __call__(self, run: RunDefinition, output_root: Path) -> DispatchOutcome:
         baseline = output_root / "runtime" / "baselines" / run.run_id
-        materialize_baseline(subject, baseline)
+        materialize_baseline(self.subject, baseline)
         preserved = False
         try:
-            verify_materialized_baseline(baseline, subject.identity)
-            local_run = run.model_copy(update={"baseline_repository": baseline, "baseline_revision": subject.identity.baseline_commit})
+            verify_materialized_baseline(baseline, self.subject.identity)
+            local_run = run.model_copy(update={"baseline_repository": baseline, "baseline_revision": self.subject.identity.baseline_commit})
+            arguments = {"run_definition": local_run, "prompt_content": self.prompts[run.prompt_id], "output_root": output_root, "phase_reporter": self.phase_reporter}
             if run.harness_id == "opencode":
-                result = execute_controlled_opencode_run(run_definition=local_run, prompt_content=prompts[run.prompt_id], output_root=output_root)
+                result = execute_controlled_opencode_run(**arguments)
             elif run.harness_id == "pi":
-                result = execute_controlled_pi_run(run_definition=local_run, prompt_content=prompts[run.prompt_id], output_root=output_root)
+                result = execute_controlled_pi_run(**arguments)
             elif run.harness_id == "hermes":
-                result = execute_controlled_hermes_run(run_definition=local_run, prompt_content=prompts[run.prompt_id], output_root=output_root)
+                result = execute_controlled_hermes_run(**arguments)
             else:  # pragma: no cover - pydantic restricts harness IDs
                 raise ExecutorError(f"unsupported harness {run.harness_id}")
             if result.failed_run is not None:
-                return False
+                manifest = result.failed_run.manifest
+                domain, phase = _failure_taxonomy(manifest.failure_class)
+                return DispatchOutcome(False, manifest.reason, domain, manifest.failure_class, phase,
+                                       False, False, True)
             assert result.run is not None and result.metrics is not None
             verify_artifact(result.run.artifact_path, repository=baseline)
             verify_metrics_artifact(result.metrics.root)
             context_path = getattr(result, "context_analysis_path", None)
             if context_path is None:
+                if self.phase_reporter is not None:
+                    self.phase_reporter("analyzing")
                 context_path = store_context_analysis_artifact(
                     source_artifact=result.run.artifact_path,
                     output_root=output_root / "analysis",
@@ -232,16 +322,49 @@ def controlled_dispatch(experiment: ExperimentDefinition, subject: FrozenSubject
             publish_result_ref(output_root, baseline, result.run.artifact_manifest)
             verify_published_result(output_root, result.run.artifact_manifest)
             preserved = True
-            return True
+            return DispatchOutcome(True, preservation_completed=True)
         except Exception as exc:
             _preserve_result_store_failure(output_root, run.run_id, baseline, exc)
             raise
         finally:
-            # Retain the only source clone on any preservation failure.
             if preserved and baseline.exists():
                 shutil.rmtree(baseline)
 
-    return dispatch
+
+def controlled_dispatch(experiment: ExperimentDefinition, subject: FrozenSubject) -> Dispatch:
+    """Create M9B dispatch from the existing controlled harness lifecycles."""
+    if experiment.identity_version != "2.0.0" or experiment.portable_baseline != subject.identity:
+        raise ExecutorError("experiment portable_baseline does not match the frozen subject")
+    return _ControlledDispatch(experiment, subject, {prompt.prompt_id: prompt.content for prompt in experiment.prompts})
+
+
+def _failure_taxonomy(failure_class: str) -> tuple[FailureDomain, RunPhase]:
+    if failure_class in {"precondition_failed", "backend_identity_mismatch", "model_hash_mismatch", "template_hash_mismatch", "benchmark_port_in_use", "conflicting_gpu_process"}:
+        return "infrastructure_precondition", "preflight"
+    if failure_class in {"backend_start_failed", "backend_readiness_failed"}:
+        return "backend_lifecycle", "running"
+    if failure_class == "preservation_failed":
+        return "preservation", "preserving"
+    return "executor", "preflight"
+
+
+def _trip_circuit_breaker(
+    state: ExperimentState,
+    progress: RunProgress,
+    consecutive: tuple[FailureDomain, str, int] | None,
+) -> bool:
+    """Stop after two identical global infrastructure failures in one invocation."""
+    if consecutive is None:
+        return False
+    domain, failure_class, count = consecutive
+    if count < 2:
+        return False
+    state.circuit_breaker = {
+        "schema_version": "1.0.0", "threshold": 2,
+        "failure_domain": domain, "failure_class": failure_class,
+        "trigger_run_id": progress.run_id, "message": "stopped after two identical infrastructure failures; no later matrix rows were attempted",
+    }
+    return True
 
 
 def _preserve_result_store_failure(output_root: Path, run_id: str, baseline: Path, error: Exception) -> None:

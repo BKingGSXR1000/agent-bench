@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 
 from agent_bench.backend import (
     BackendLifecycleError,
@@ -43,6 +44,7 @@ def execute_controlled_pi_run(
     output_root: Path,
     backend_profile: BackendProfile | None = None,
     pi_profile: PiProfile | None = None,
+    phase_reporter: Callable[[str], None] | None = None,
 ) -> ControlledPiResult:
     """Execute one Pi run or seal pre-task backend failure evidence."""
     if run_definition.harness_id != "pi":
@@ -65,6 +67,9 @@ def execute_controlled_pi_run(
         shutil.rmtree(control_root)
         return ControlledPiResult(None, None, failed)
 
+    if phase_reporter is not None:
+        phase_reporter("running")
+
     owned: OwnedBackendProcess | None = None; service: _BackendProxyTaskService | None = None; failure_class = "backend_start_failed"
     try:
         try: owned = start_owned_backend(backend, backend_paths, report, control_root / "stdout.log", control_root / "stderr.log", run_seed=run_seed)
@@ -75,6 +80,8 @@ def execute_controlled_pi_run(
             failure_class = "backend_readiness_failed"; raise BackendLifecycleError(str(exc)) from exc
         service = _BackendProxyTaskService(profile=backend, preflight=report, owned=owned, startup_ns=startup_ns, control_root=control_root, run_seed=run_seed)
         result = execute_run(run_definition=run_definition, prompt_content=prompt_content, adapter=PiAdapter(harness), artifacts_root=output / "artifacts", worktrees_root=output / "worktrees", isolation_root=output / "runtime" / "harness", proxy_endpoint=harness.proxy_base_url, run_seed=run_seed, task_service=service)
+        if phase_reporter is not None:
+            phase_reporter("analyzing")
         metrics = calculate_run_metrics(result.artifact_path)
         stored = store_metrics_artifact(source_artifact=result.artifact_path, output_root=output / "analysis", metrics=metrics)
         shutil.rmtree(control_root)
