@@ -157,10 +157,18 @@ criteria, manual-review dimensions, and representative non-executed expansion.
 
 ## M9B — Experiment Executor / Resume / Matrix Automation / Progress
 
-Status: pending
+Status: completed
 
-Implement controlled matrix execution, resume, progress, and subject baseline
-selection. Do not broaden M9A into execution.
+Implements the sequential controlled matrix executor, portable v2 identities,
+fresh bundle-backed baseline materialization, atomic progress/resume, subset
+and dry-run planning, global toolchain preflight, and publication-ready local
+payload verification policy. Result commits are transferred before cleanup into
+an output-root-scoped bare store, and bootstrap provenance is actionable. The
+authoritative one-run host smoke completed with result ref
+`refs/agent-bench/results/hermes-hermes-default-v1-keyboard-entry-vague-r001-e041841d2df985953b43d6c4`
+at commit `c8f9bb076ce7436ddf400a779a0e1785d94931ad`; its immutable artifacts,
+analysis artifacts, persistent Git ancestry, and cleanup all verified. Earlier
+smokes remain immutable diagnostic evidence. M9C remains unstarted.
 
 ## M9C — Reporting / DuckDB / Parquet / HTML / Charts
 

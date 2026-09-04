@@ -2,6 +2,9 @@
 
 import json
 import shlex
+import shutil
+import signal
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
@@ -60,6 +63,17 @@ from agent_bench.preservation import (
     verify_artifact,
 )
 from agent_bench.runner import RunLifecycleError, execute_run
+from agent_bench.executor import (
+    ExecutorError,
+    ExperimentExecutor,
+    ExperimentState,
+    controlled_dispatch,
+    create_state,
+    status as executor_status,
+)
+from agent_bench.subject import SubjectError, load_frozen_subject
+from agent_bench.toolchains import verify_toolchains
+from agent_bench.bootstrap import BootstrapError, install_toolchains
 
 app = typer.Typer(
     add_completion=False,
@@ -111,6 +125,11 @@ hermes_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(hermes_app, name="hermes")
+toolchains_app = typer.Typer(
+    help="Verify benchmark-managed local payloads against tracked identities.",
+    no_args_is_help=True,
+)
+app.add_typer(toolchains_app, name="toolchains")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -172,6 +191,122 @@ def expand_experiment_command(
             f"{position}\t{run.run_id}\t{run.harness_id}\t{run.profile_id}\t"
             f"{run.prompt_id}\t{run.repetition_index}"
         )
+
+
+@experiment_app.command("plan")
+def plan_experiment(path: Path, json_output: bool = False) -> None:
+    """Validate and display the immutable future execution plan."""
+    experiment = _load_or_exit(path)
+    state = create_state(experiment)
+    payload = {"status": executor_status(state), "runs": [r.model_dump() for r in state.runs]}
+    typer.echo(json.dumps(payload, sort_keys=True) if json_output else f"{experiment.experiment_id}: {len(state.runs)} planned runs; expansion={state.expansion_digest}")
+
+
+@experiment_app.command("status")
+def experiment_status(path: Path, json_output: bool = False) -> None:
+    """Show persisted executor status without starting a run."""
+    try: state = ExperimentState.model_validate_json((path / "experiment-state.json").read_bytes())
+    except Exception as exc: raise typer.BadParameter(f"invalid experiment state: {exc}") from exc
+    payload = executor_status(state)
+    typer.echo(json.dumps(payload, sort_keys=True) if json_output else json.dumps(payload, indent=2, sort_keys=True))
+
+
+@experiment_app.command("run")
+def run_experiment(
+    path: Path,
+    output_root: Path = Path("runs/pocket-ledger-v1-qwen38"),
+    resume: bool = False,
+    max_runs: int | None = typer.Option(None, "--max-runs", min=1),
+    run_id: list[str] = typer.Option([], "--run-id"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    subject_root: Path = Path("subjects/pocket-ledger-v1"),
+) -> None:
+    """Run a selected sequential M9B matrix subset, or print its immutable plan."""
+    experiment = _load_or_exit(path)
+    output = output_root.expanduser().resolve()
+    if dry_run:
+        plan = ExperimentExecutor(experiment, output, lambda _run, _root: True).plan()
+        selected = [item for item in plan if not run_id or item.run_id in set(run_id)]
+        if max_runs is not None:
+            selected = selected[:max_runs]
+        typer.echo(json.dumps({"experiment_id": experiment.experiment_id, "planned": len(plan), "selected": [item.run_id for item in selected]}, sort_keys=True))
+        return
+    if shutil.disk_usage(output.parent if output.parent.exists() else Path.cwd()).free < 2 * 1024**3:
+        typer.echo("Error: less than 2 GiB free at the requested output location", err=True)
+        raise typer.Exit(code=1)
+    report = verify_toolchains()
+    failures = {name: value for name, value in report.items() if value["status"] != "OK"}
+    if failures:
+        typer.echo(json.dumps({"global_preflight": "failed", "toolchains": report}, sort_keys=True), err=True)
+        raise typer.Exit(code=1)
+    backend_report = _experiment_backend_preflight(output)
+    if not backend_report.passed:
+        typer.echo(json.dumps({"global_preflight": "failed", "toolchains": report, "backend": backend_report.model_dump(mode="json")}, sort_keys=True), err=True)
+        raise typer.Exit(code=1)
+    try:
+        subject = load_frozen_subject(subject_root)
+        executor = ExperimentExecutor(experiment, output, controlled_dispatch(experiment, subject))
+        previous = signal.signal(signal.SIGTERM, lambda _signum, _frame: (_ for _ in ()).throw(KeyboardInterrupt()))
+        try:
+            state = executor.run(resume=resume, limit=max_runs, selected=set(run_id) if run_id else None)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+    except (ExecutorError, SubjectError, KeyboardInterrupt) as exc:
+        typer.echo(f"Error: {exc or 'executor interrupted'}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps({"global_preflight": "passed", "status": executor_status(state)}, sort_keys=True))
+
+
+def _experiment_backend_preflight(output: Path):
+    """Perform one fail-closed global backend/GPU/port check before any row."""
+    output.mkdir(parents=True, exist_ok=True)
+    profile = load_backend_profile()
+    with tempfile.TemporaryDirectory(prefix=".global-preflight-", dir=output) as temporary:
+        root = Path(temporary)
+        paths = BackendRunPaths(
+            home=root / "home", xdg_config_home=root / "config", xdg_cache_home=root / "cache",
+            xdg_data_home=root / "data", xdg_state_home=root / "state",
+        )
+        for value in (
+            paths.home, paths.xdg_config_home, paths.xdg_cache_home,
+            paths.xdg_data_home, paths.xdg_state_home,
+        ):
+            value.mkdir(parents=True)
+        report = preflight_backend(profile, paths, run_seed=1001)
+    (output / "global-preflight.json").write_text(
+        json.dumps(report.model_dump(mode="json"), sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8", newline="\n",
+    )
+    return report
+
+
+@toolchains_app.command("verify")
+def toolchains_verify(json_output: bool = False) -> None:
+    """Verify pinned local toolchain, backend, and model bytes; starts no server."""
+    report = verify_toolchains()
+    if json_output:
+        typer.echo(json.dumps(report, sort_keys=True))
+    else:
+        for name, value in report.items():
+            typer.echo(f"{name:<20} {value['status']:<18} {value['detail']}")
+    if any(value["status"] != "OK" for value in report.values()):
+        raise typer.Exit(code=1)
+
+
+@toolchains_app.command("install")
+def toolchains_install(
+    component: list[str] = typer.Option([], "--component", help="Pinned component: opencode, node, pi, hermes, llama-cpp, or qwen."),
+    include_model: bool = typer.Option(False, "--include-model", help="Permit the large pinned Qwen GGUF download."),
+    model_destination: Path | None = typer.Option(None, "--model-destination", help="Optional destination for the Qwen GGUF."),
+) -> None:
+    """Materialize exact public payloads; unavailable build payloads stay explicit."""
+    try:
+        report = install_toolchains(tuple(component), include_model=include_model, model_destination=model_destination)
+    except BootstrapError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for name, outcome in report.items():
+        typer.echo(f"{name:<20} {outcome}")
 
 
 @git_app.command("baseline")

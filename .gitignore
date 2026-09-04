@@ -9,7 +9,10 @@ __pycache__/
 # Benchmark-managed JavaScript toolchain payloads; manifests and lockfiles remain tracked.
 toolchains/*/*/node_modules/
 # The pinned Node executable is a local benchmark-toolchain payload; its identity is tracked.
-toolchains/node/*/bin/node
+toolchains/node/*/bin/
+toolchains/node/*/include/
+toolchains/node/*/lib/
+toolchains/node/*/share/
 # OpenCode is likewise a locally provisioned benchmark-toolchain payload.
 toolchains/opencode/*/bin/opencode
 # Hermes and its CPython runtime are locally materialized benchmark-toolchain

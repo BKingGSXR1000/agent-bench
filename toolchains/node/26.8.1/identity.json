@@ -1,5 +1,11 @@
 {
   "schema_version": "1.0.0",
+  "portable_identity": {
+    "canonical_upstream": "https://nodejs.org/dist/v26.8.1/",
+    "optional_release_asset_source": null,
+    "destination_layout": "toolchains/node/26.8.1/bin/node",
+    "content_identity_authority": "size_bytes plus sha256"
+  },
   "runtime": "node",
   "version": "v26.8.1",
   "path": "/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin/node",
@@ -9,4 +15,14 @@
   "source_path_at_install": "/home/bking/.hermes/node/bin/node",
   "source_sha256": "19235a9b678f84729464c52623f92de130a165452747c6826d3fdc13df3abcc3",
   "runtime_dependencies": "ELF executable linked only against standard host libraries recorded by ldd; no Hermes shell initialization or Hermes runtime files are used at benchmark execution."
+  ,"public_source": {
+    "release_url": "https://nodejs.org/dist/v26.8.1/",
+    "linux_x64_archive": {
+      "name": "node-v26.8.1-linux-x64.tar.xz",
+      "url": "https://nodejs.org/dist/v26.8.1/node-v26.8.1-linux-x64.tar.xz",
+      "sha256": "3e301118d7df53d563b7e96c1617545f26e2f76f9724be668d6cab65c15dda5d",
+      "top_level_directory": "node-v26.8.1-linux-x64"
+    },
+    "alternate_mirrors": []
+  }
 }

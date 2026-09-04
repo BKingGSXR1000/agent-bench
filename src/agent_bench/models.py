@@ -32,6 +32,7 @@ Identifier = Annotated[
 ]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 SchemaVersion = Literal["1.0.0"]
+IdentityVersion = Literal["1.0.0", "2.0.0"]
 HarnessId = Literal["opencode", "pi", "hermes"]
 JsonMapping = dict[str, JsonValue]
 
@@ -114,6 +115,13 @@ class BackendIdentity(PersistedModel):
     build_metadata: JsonMapping = Field(default_factory=dict)
     invocation_template_version: str = Field(default="1.0.0", min_length=1)
 
+    def _definition_identity(self) -> object:
+        """The executable location is host evidence, not benchmark identity."""
+        data = super()._definition_identity()
+        assert isinstance(data, dict)
+        data.pop("executable", None)
+        return data
+
 
 class HardwareIdentity(PersistedModel):
     """Expected fixed hardware profile, not a dynamic observation."""
@@ -187,6 +195,14 @@ class FixedEnvironment(PersistedModel):
     warmup: WarmupPolicy = Field(default_factory=WarmupPolicy)
     environment_allowlist: tuple[str, ...] = ()
 
+    def _definition_identity(self) -> object:
+        """Compose fixed-environment identity from semantic/content identities."""
+        data = super()._definition_identity()
+        assert isinstance(data, dict)
+        data["model"] = self.model._definition_identity()
+        data["backend"] = self.backend._definition_identity()
+        return data
+
 
 class PromptDefinition(PersistedModel):
     """A byte-exact UTF-8 prompt loaded from a separate file."""
@@ -236,6 +252,13 @@ class HarnessDefinition(PersistedModel):
     upstream_project: str = Field(min_length=1)
     supported_raw_capture_sources: tuple[str, ...] = ()
 
+    def _definition_identity(self) -> object:
+        """A pinned release identity, rather than its local executable path."""
+        data = super()._definition_identity()
+        assert isinstance(data, dict)
+        data.pop("executable", None)
+        return data
+
 
 class HarnessProfile(PersistedModel):
     """Clean, versioned settings for one harness identity."""
@@ -255,6 +278,13 @@ class HarnessProfile(PersistedModel):
         if (self.bundle_path is None) != (self.bundle_sha256 is None):
             raise ValueError("bundle_path and bundle_sha256 must be supplied together")
         return self
+
+    def _definition_identity(self) -> object:
+        """Profile bytes and semantics identify a profile; its checkout path does not."""
+        data = super()._definition_identity()
+        assert isinstance(data, dict)
+        data.pop("bundle_path", None)
+        return data
 
 
 class ExecutionOrdering(PersistedModel):
@@ -287,6 +317,31 @@ class RunLimits(PersistedModel):
     wall_timeout_seconds: float = Field(default=300.0, gt=0)
 
 
+class PortableBaselineIdentity(PersistedModel):
+    """Versioned, path-independent identity of a frozen benchmark subject."""
+
+    subject_id: Identifier
+    subject_version: str = Field(min_length=1)
+    baseline_commit: str = Field(pattern=r"^[0-9a-f]{40,64}$")
+    baseline_tree: str = Field(pattern=r"^[0-9a-f]{40,64}$")
+    baseline_bundle_sha256: Sha256
+
+
+def _portable_baseline_payload(identity: PortableBaselineIdentity) -> dict[str, object]:
+    """Return only portable baseline fields, never a materialization path."""
+    return identity.model_dump(mode="json", exclude={"definition_digest"})
+
+
+def _contains_absolute_path_string(value: object) -> bool:
+    if isinstance(value, str):
+        return value.startswith("/")
+    if isinstance(value, dict):
+        return any(_contains_absolute_path_string(item) for item in value.values())
+    if isinstance(value, (tuple, list)):
+        return any(_contains_absolute_path_string(item) for item in value)
+    return False
+
+
 class ExperimentDefinition(PersistedModel):
     """One validated benchmark-v1 experiment matrix definition."""
 
@@ -294,8 +349,12 @@ class ExperimentDefinition(PersistedModel):
     name: str = Field(min_length=1)
     description: str | None = None
     created_at: datetime
+    # 1.0.0 retains M1's historical identity algorithm.  2.0.0 is mandatory
+    # for published/future matrices and excludes host-local paths.
+    identity_version: IdentityVersion = "1.0.0"
     baseline_repository: Path
     baseline_revision: str = Field(min_length=1)
+    portable_baseline: PortableBaselineIdentity | None = None
     fixed_environment: FixedEnvironment
     harnesses: tuple[HarnessDefinition, ...] = Field(min_length=1)
     harness_profiles: tuple[HarnessProfile, ...] = Field(min_length=1)
@@ -313,6 +372,16 @@ class ExperimentDefinition(PersistedModel):
 
     @model_validator(mode="after")
     def validate_relationships(self) -> ExperimentDefinition:
+        if self.identity_version == "2.0.0" and self.portable_baseline is None:
+            raise ValueError("identity_version 2.0.0 requires portable_baseline")
+        if self.identity_version == "2.0.0":
+            # Typed paths are excluded in favour of content identities. Do not
+            # permit an untyped settings map to reintroduce host locality.
+            values = [("fixed_environment.server_parameters", self.fixed_environment.server_parameters)]
+            values.extend((f"harness_profile[{profile.profile_id}].settings", profile.settings) for profile in self.harness_profiles)
+            for label, value in values:
+                if _contains_absolute_path_string(value):
+                    raise ValueError(f"identity_version 2.0.0 forbids local path strings in {label}")
         self._require_unique(
             (harness.harness_id for harness in self.harnesses), "harness_id"
         )
@@ -340,6 +409,29 @@ class ExperimentDefinition(PersistedModel):
                 + ", ".join(sorted(missing))
             )
         return self
+
+    def _definition_identity(self) -> object:
+        data = super()._definition_identity()
+        assert isinstance(data, dict)
+        if self.identity_version == "2.0.0":
+            data.pop("baseline_repository", None)
+            data.pop("baseline_revision", None)
+            # Nested model_dump() deliberately preserves raw local paths for
+            # forensic manifests.  Definition v2 instead composes identities.
+            data["fixed_environment"] = {
+                "fixed_environment_id": self.fixed_environment.fixed_environment_id,
+                "definition_digest": self.fixed_environment.definition_digest,
+            }
+            data["harnesses"] = [
+                {"harness_id": item.harness_id, "definition_digest": item.definition_digest}
+                for item in sorted(self.harnesses, key=lambda item: item.harness_id)
+            ]
+            data["harness_profiles"] = [
+                {"profile_id": item.profile_id, "definition_digest": item.definition_digest}
+                for item in sorted(self.harness_profiles, key=lambda item: item.profile_id)
+            ]
+            data["prompts"] = [item._definition_identity() for item in sorted(self.prompts, key=lambda item: item.prompt_id)]
+        return data
 
     @staticmethod
     def _require_unique(values: Iterable[str], label: str) -> None:
@@ -385,12 +477,10 @@ class ExperimentDefinition(PersistedModel):
             ),
             key=lambda item: item["prompt_id"],
         )
-        return canonical_sha256(
-            {
+        payload: dict[str, object] = {
                 "schema_version": self.schema_version,
+                "identity_version": self.identity_version,
                 "experiment_id": self.experiment_id,
-                "baseline_repository": str(self.baseline_repository),
-                "baseline_revision": self.baseline_revision,
                 "fixed_environment_id": self.fixed_environment.fixed_environment_id,
                 "fixed_environment_digest": self.fixed_environment.definition_digest,
                 "harnesses": harnesses,
@@ -401,7 +491,16 @@ class ExperimentDefinition(PersistedModel):
                     mode="json", exclude={"definition_digest"}
                 ),
             }
-        )
+        if self.identity_version == "2.0.0":
+            assert self.portable_baseline is not None
+            payload["portable_baseline"] = _portable_baseline_payload(
+                self.portable_baseline
+            )
+        else:
+            # This preserves the identity of sealed M1-era definitions.
+            payload["baseline_repository"] = str(self.baseline_repository)
+            payload["baseline_revision"] = self.baseline_revision
+        return canonical_sha256(payload)
 
 
 class RunDefinition(PersistedModel):
@@ -410,9 +509,11 @@ class RunDefinition(PersistedModel):
     run_id: Identifier
     experiment_id: Identifier
     experiment_matrix_digest: Sha256
+    identity_version: IdentityVersion = "1.0.0"
     matrix_index: int = Field(ge=1)
     baseline_repository: Path
     baseline_revision: str = Field(min_length=1)
+    portable_baseline: PortableBaselineIdentity | None = None
     fixed_environment_id: Identifier
     fixed_environment_digest: Sha256
     generation_seed: int | None
@@ -427,3 +528,17 @@ class RunDefinition(PersistedModel):
     semantic_task_id: Identifier
     repetition_index: int = Field(ge=1)
     limits: RunLimits
+
+    @model_validator(mode="after")
+    def validate_portable_identity(self) -> RunDefinition:
+        if self.identity_version == "2.0.0" and self.portable_baseline is None:
+            raise ValueError("identity_version 2.0.0 requires portable_baseline")
+        return self
+
+    def _definition_identity(self) -> object:
+        data = super()._definition_identity()
+        assert isinstance(data, dict)
+        if self.identity_version == "2.0.0":
+            data.pop("baseline_repository", None)
+            data.pop("baseline_revision", None)
+        return data

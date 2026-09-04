@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0.0",
+  "product": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "public_source": {
+    "repository": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF",
+    "repository_commit": "f975863083b62f54a5e6fac11671c750c2bbc59c",
+    "file": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/f975863083b62f54a5e6fac11671c750c2bbc59c/Qwen3.8-27B-UD-Q4_K_XL.gguf?download=true",
+    "sha256": "bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372",
+    "size_bytes": 17923394624,
+    "alternate_mirrors": []
+  }
+}

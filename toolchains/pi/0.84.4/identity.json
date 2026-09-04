@@ -1,5 +1,11 @@
 {
   "schema_version": "1.0.0",
+  "portable_identity": {
+    "canonical_upstream": "npm:@earendil-works/pi-coding-agent@0.84.4",
+    "optional_release_asset_source": null,
+    "destination_layout": "toolchains/pi/0.84.4",
+    "content_identity_authority": "registry integrity, package-lock, and node_modules tree sha256"
+  },
   "package": {
     "name": "@earendil-works/pi-coding-agent",
     "version": "0.84.4",
@@ -47,5 +53,11 @@
     "version_output": "0.84.4",
     "cli_help_path": "cli-help.txt",
     "cli_help_sha256": "894957a01dfbf97ec0723edadbbc95094e0f216fc735705f47b94c2ddcb0962a"
+  },
+  "public_source": {
+    "registry_url": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/0.84.4",
+    "lockfile_path": "toolchains/pi/0.84.4/package-lock.json",
+    "materialization_argv": ["<benchmark-node>", "<benchmark-node-root>/lib/node_modules/npm/bin/npm-cli.js", "ci", "--prefix", "toolchains/pi/0.84.4", "--ignore-scripts"],
+    "alternate_mirrors": []
   }
 }

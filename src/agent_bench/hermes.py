@@ -128,22 +128,22 @@ def _load_toolchain(identity_path: Path) -> HermesRuntime:
             raise KeyError("runtime/installation/source/python")
         return HermesRuntime.model_validate(
             {
-                "node_path": raw["node"]["executable_path"],
+                "node_path": _resolve_toolchain_path(raw["node"]["executable_path"]),
                 "node_sha256": raw["node"]["executable_sha256"],
                 "node_version": raw["node"]["version"],
-                "python_path": python["executable_path"],
+                "python_path": _resolve_toolchain_path(python["executable_path"]),
                 "python_sha256": python["executable_sha256"],
                 "python_version": python["version"],
-                "entrypoint_path": runtime["entrypoint_path"],
+                "entrypoint_path": _resolve_toolchain_path(runtime["entrypoint_path"]),
                 "entrypoint_sha256": runtime["entrypoint_sha256"],
                 "version_output": runtime["version_output"],
-                "source_root": source["source_root"],
+                "source_root": _resolve_toolchain_path(source["source_root"]),
                 "source_tree_sha256": source["tree_sha256"],
                 "source_tree_records": source["tree_records"],
-                "environment_root": installation["venv_root"],
+                "environment_root": _resolve_toolchain_path(installation["venv_root"]),
                 "environment_tree_sha256": installation["venv_tree_sha256"],
                 "environment_tree_records": installation["venv_tree_records"],
-                "python_root": python["root"],
+                "python_root": _resolve_toolchain_path(python["root"]),
                 "python_tree_sha256": python["tree_sha256"],
                 "python_tree_records": python["tree_records"],
                 "uv_lock_sha256": source["uv_lock_sha256"],
@@ -152,6 +152,17 @@ def _load_toolchain(identity_path: Path) -> HermesRuntime:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise HermesError(f"invalid Hermes toolchain identity: {exc}") from exc
+
+
+def _resolve_toolchain_path(value: object) -> Path:
+    if not isinstance(value, str):
+        raise HermesError("toolchain path must be a string")
+    path = Path(value)
+    if not path.is_absolute():
+        return (Path(__file__).resolve().parents[2] / path).resolve()
+    if "toolchains" in path.parts:
+        return Path(__file__).resolve().parents[2] / "toolchains" / Path(*path.parts[path.parts.index("toolchains") + 1:])
+    return path
 
 
 def inspect_hermes_toolchain(

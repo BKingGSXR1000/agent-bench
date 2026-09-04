@@ -103,12 +103,25 @@ def load_opencode_profile(
         raise OpenCodeError("OpenCode profile config_file must be a string")
     raw["profile_path"] = profile_path
     raw["config_file"] = (profile_path.parent / config_value).resolve()
+    executable = raw.get("executable")
+    if isinstance(executable, dict) and isinstance(executable.get("path"), str):
+        executable["path"] = _resolve_benchmark_path(executable["path"], profile_path.parent)
     try:
         profile = OpenCodeProfile.model_validate(raw)
     except ValueError as exc:
         raise OpenCodeError(f"invalid OpenCode profile: {exc}") from exc
     _verify_file(profile.config_file, profile.config_sha256)
     return profile
+
+
+def _resolve_benchmark_path(value: str, base: Path) -> Path:
+    """Resolve a checked-in layout path without retaining an old clone root."""
+    path = Path(value)
+    if not path.is_absolute():
+        return (base / path).resolve()
+    if "toolchains" in path.parts:
+        return Path(__file__).resolve().parents[2] / "toolchains" / Path(*path.parts[path.parts.index("toolchains") + 1:])
+    return path
 
 
 def inspect_opencode_executable(path: Path) -> OpenCodeExecutable:

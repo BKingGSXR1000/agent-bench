@@ -3,6 +3,15 @@
 Status: Milestone M6 fixed-backend and OpenCode implementation contract
 Specification version: 1.0.0
 
+## Published portable identity boundary
+
+M9B introduces `identity_version: 2.0.0` for future published experiments.
+See `PORTABLE_IDENTITIES.md`. Paths are local execution evidence, not semantic
+identity; hashes, commits, trees, locks, and versioned configuration are the
+portable identities. Earlier sealed M1--M8 records retain their original v1
+identity algorithm and are not rewritten. `TOOLCHAINS.md` defines the matching
+GitHub/public payload policy and local verification command.
+
 ## 1. Reproducibility objective
 
 An Agent Bench run is reproducible when a later operator can identify the exact task inputs and software/hardware configuration, reconstruct the isolated starting state, inspect the exact invocation, and verify the preserved result bytes. Reproducibility does not claim that nondeterministic GPU execution or an uncontrollable harness will yield byte-identical model output; it requires that every controllable input and known source of variation be fixed and recorded.
@@ -27,7 +36,7 @@ Before any run is allocated, a repository reference is resolved to:
 
 Branch and tag names are informational after resolution. Every run manifest records the full commit/tree identity and verifies its temporary detached worktree before submitting the prompt. The baseline checkout is never the agent workspace.
 
-The complete result is preserved separately, with result-tree/snapshot identity and any necessary Git objects pinned against garbage collection. The implemented M2 procedure is specified in `PRESERVATION.md`.
+The complete result is preserved separately, with result-tree/snapshot identity and any necessary Git objects pinned against garbage collection. For M9B executor runs, the durable owner is the output-root-scoped bare store `<output>/git/results.git`, never a user/global repository or a disposable baseline clone. Before an experiment run is marked complete, its sealed artifact, metrics/context analyses, result ref, result tree, baseline tree, and baseline ancestry must all verify in that store. The source clone is removed only after this transfer; a transfer failure retains it and creates preservation-failure evidence. The implemented M2 procedure is specified in `PRESERVATION.md`.
 
 ## 3. Model identity
 
@@ -37,6 +46,11 @@ The fixed model is
 `bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372`.
 Before each run, the file is streamed through SHA256 verification; filename or
 path alone is insufficient.
+
+The exact public materialization pointer is the immutable Unsloth repository
+revision and file URL in `environment/model-v1.json`; the content hash and size
+above remain authoritative even if a future GitHub Release or other immutable
+mirror is added.
 
 The run manifest records:
 
@@ -69,6 +83,12 @@ each observed run record:
 - the command/tool used to obtain each identity field.
 
 Missing required identity fields cause a precondition failure. Optional unavailable fields remain explicitly unavailable and cannot be filled from assumptions.
+
+`environment/llama-cpp-build-v1.json` records the inspected reference build
+inputs: source URL/commit, Release build, CUDA 12.9.86, GCC 13.3, architectures
+70/86, CUDA/FlashAttention/graphs/NCCL options, and exact CMake/build argv.
+Those inputs permit a source-equivalent rebuild but do not relax benchmark-v1's
+strict executable and shared-library byte identity in `backend-v1.yaml`.
 
 ## 5. Exact llama-server invocation representation
 

@@ -148,17 +148,17 @@ def _load_toolchain(identity_path: Path) -> PiToolchain:
                 "package_name": package["name"],
                 "package_version": package["version"],
                 "package_integrity": package["registry_integrity"],
-                "installation_root": installation["root"],
+                "installation_root": _resolve_toolchain_path(installation["root"]),
                 "package_lock_sha256": installation["package_lock_sha256"],
                 "node_modules_tree_sha256": installation["node_modules_tree_sha256"],
                 "node_modules_tree_records": installation["node_modules_tree_records"],
                 "node": {
-                    "path": runtime["node_path"],
+                    "path": _resolve_toolchain_path(runtime["node_path"]),
                     "size_bytes": runtime["node_size_bytes"],
                     "sha256": runtime["node_sha256"],
                     "version": installation["node_version"],
                 },
-                "entrypoint_path": runtime["entrypoint_path"],
+                "entrypoint_path": _resolve_toolchain_path(runtime["entrypoint_path"]),
                 "entrypoint_size_bytes": runtime["entrypoint_size_bytes"],
                 "entrypoint_sha256": runtime["entrypoint_sha256"],
                 "version_output": runtime["version_output"],
@@ -167,6 +167,17 @@ def _load_toolchain(identity_path: Path) -> PiToolchain:
         )
     except (KeyError, ValueError) as exc:
         raise PiError(f"invalid Pi toolchain identity: {exc}") from exc
+
+
+def _resolve_toolchain_path(value: object) -> Path:
+    if not isinstance(value, str):
+        raise PiError("toolchain path must be a string")
+    path = Path(value)
+    if not path.is_absolute():
+        return (Path(__file__).resolve().parents[2] / path).resolve()
+    if "toolchains" in path.parts:
+        return Path(__file__).resolve().parents[2] / "toolchains" / Path(*path.parts[path.parts.index("toolchains") + 1:])
+    return path
 
 
 def inspect_pi_toolchain(

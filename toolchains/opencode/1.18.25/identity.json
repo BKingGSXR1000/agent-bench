@@ -1,11 +1,28 @@
 {
   "schema_version": "1.0.0",
+  "portable_identity": {
+    "canonical_upstream": "https://github.com/anomalyco/opencode",
+    "optional_release_asset_source": null,
+    "destination_layout": "toolchains/opencode/1.18.25/bin/opencode",
+    "content_identity_authority": "size_bytes plus sha256"
+  },
   "product": "OpenCode",
   "version": "1.18.25",
   "benchmark_managed_binary_path": "/home/bking/AI/agent-bench/toolchains/opencode/1.18.25/bin/opencode",
   "size_bytes": 184682624,
   "sha256": "d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb",
   "runtime_type": "self-contained Bun ELF",
+  "public_source": {
+    "release_url": "https://github.com/anomalyco/opencode/releases/tag/v1.18.25",
+    "release_tag": "v1.18.25",
+    "release_commit": "733562e92a96255fb123aae92f267e4534a635fb",
+    "linux_x64_asset": {
+      "name": "opencode-linux-x64.tar.gz",
+      "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-linux-x64.tar.gz",
+      "sha256": "58a3729a6f3432dd6d2917fcc4a949788891a035818646ad480e12c947f56e78"
+    },
+    "alternate_mirrors": []
+  },
   "source_adjacent_packages_at_materialization": {
     "@opencode-ai/sdk": "1.18.19",
     "@opencode-ai/plugin": "1.18.19"

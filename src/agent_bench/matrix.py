@@ -118,10 +118,9 @@ def _make_run_definition(
 ) -> RunDefinition:
     intrinsic_identity = {
         "schema_version": "1.0.0",
+        "identity_version": experiment.identity_version,
         "experiment_id": experiment.experiment_id,
         "experiment_matrix_digest": experiment.matrix_digest,
-        "baseline_repository": str(experiment.baseline_repository),
-        "baseline_revision": experiment.baseline_revision,
         "fixed_environment_id": experiment.fixed_environment.fixed_environment_id,
         "fixed_environment_digest": experiment.fixed_environment.definition_digest,
         "generation_seed": (
@@ -145,15 +144,32 @@ def _make_run_definition(
             mode="json", exclude={"definition_digest"}
         ),
     }
+    if experiment.identity_version == "2.0.0":
+        # The checkout location is intentionally operational only.  A fresh
+        # clone may materialize this same bundle anywhere and retain run IDs.
+        assert experiment.portable_baseline is not None
+        intrinsic_identity["portable_baseline"] = experiment.portable_baseline.model_dump(
+            mode="json", exclude={"definition_digest"}
+        )
+    else:
+        # Preserve M1's historical, path-bearing identity for sealed evidence.
+        intrinsic_identity["baseline_repository"] = str(experiment.baseline_repository)
+        intrinsic_identity["baseline_revision"] = experiment.baseline_revision
     identity_digest = canonical_sha256(intrinsic_identity)
     run_id = (
         f"{_slug(harness.harness_id)}-{_slug(profile.profile_id)}-"
         f"{_slug(prompt.prompt_id)}-r{repetition_index:03d}-{identity_digest[:24]}"
     )
+    run_payload = dict(intrinsic_identity)
+    # These values are required to execute a run locally, but v2 intentionally
+    # leaves them outside the intrinsic ID/digest.
+    if experiment.identity_version == "2.0.0":
+        run_payload["baseline_repository"] = str(experiment.baseline_repository)
+        run_payload["baseline_revision"] = experiment.baseline_revision
     return RunDefinition(
         run_id=run_id,
         matrix_index=matrix_index,
-        **intrinsic_identity,
+        **run_payload,
     )
 
 

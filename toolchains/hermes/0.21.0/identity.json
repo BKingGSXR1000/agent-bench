@@ -1,5 +1,11 @@
 {
   "schema_version": "1.0.0",
+  "portable_identity": {
+    "canonical_upstream": "https://github.com/NousResearch/hermes-agent",
+    "optional_release_asset_source": null,
+    "destination_layout": "toolchains/hermes/0.21.0/{source,venv}",
+    "content_identity_authority": "source commit/lock plus source, venv, and runtime tree sha256"
+  },
   "product": "Hermes Agent",
   "version": "0.21.0",
   "source": {
@@ -19,7 +25,9 @@
     "venv_root": "/home/bking/AI/agent-bench/toolchains/hermes/0.21.0/venv",
     "venv_tree_sha256": "8f4be886be35f8b3a29ca52987fc5c6d08141ab111a42ec7a549fdbc5f6175b5",
     "venv_tree_records": 10340,
-    "payload_size_bytes": 422234788
+    "payload_size_bytes": 422234788,
+    "materialization_argv": ["git", "clone", "https://github.com/NousResearch/hermes-agent.git", "toolchains/hermes/0.21.0/source"],
+    "venv_materialization_argv": ["<pinned-uv>", "sync", "--locked", "--python", "3.11", "--extra", "all"]
   },
   "python": {
     "root": "/home/bking/AI/agent-bench/toolchains/python/3.11.16",
@@ -45,6 +53,13 @@
   "provenance": {
     "materialization_source": "/home/bking/.hermes/hermes-agent (read-only source and resolved environment only)",
     "personal_runtime_used_at_benchmark_execution": false,
-    "personal_configuration_or_state_copied": false
+    "personal_configuration_or_state_copied": false,
+    "public_source": "https://github.com/NousResearch/hermes-agent/tree/b3576a29c3f1a71f087c749a69fbb28f4e9628d6",
+    "uv": {
+      "upstream": "https://github.com/astral-sh/uv",
+      "version": "0.12.7",
+      "linux_x86_64_sha256": "8264360c1b0a6f3df3d31620942216f57bba860179a2fc0916af1e5cf87c0d52"
+    },
+    "alternate_mirrors": []
   }
 }
