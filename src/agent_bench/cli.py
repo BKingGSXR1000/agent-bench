@@ -74,6 +74,7 @@ from agent_bench.executor import (
 from agent_bench.subject import SubjectError, load_frozen_subject
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
+from agent_bench.reporting import ReportError, build_report, export_public, report_status, verify_report
 
 app = typer.Typer(
     add_completion=False,
@@ -130,6 +131,11 @@ toolchains_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(toolchains_app, name="toolchains")
+report_app = typer.Typer(
+    help="Build and inspect deterministic derived reports without changing run evidence.",
+    no_args_is_help=True,
+)
+app.add_typer(report_app, name="report")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -418,6 +424,62 @@ def context_show(path: Path) -> None:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(analysis.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True))
+
+
+@report_app.command("build")
+def report_build(
+    experiment_output: Path,
+    output: Path | None = typer.Option(None, "--output", help="New derived report directory; default is REPORT_OUTPUT/report-v1."),
+    experiment_definition: Path | None = typer.Option(None, "--experiment-definition", help="Optional immutable experiment YAML used for full matrix identity labels."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the sealed report manifest as JSON."),
+) -> None:
+    """Build Parquet, DuckDB, charts, and static HTML from sealed evidence only."""
+    try:
+        report = build_report(experiment_output, output=output, experiment_definition=experiment_definition)
+    except ReportError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(json.dumps({"report_root": str(report.root), "manifest": report.manifest}, sort_keys=True))
+    else:
+        typer.echo(f"report={report.root}\nstatus=sealed\nincluded_runs={len(report.manifest['included_run_ids'])}")
+
+
+@report_app.command("status")
+def report_status_command(experiment_output: Path, json_output: bool = typer.Option(False, "--json")) -> None:
+    """Show experiment completion and the derived report's integrity state."""
+    try:
+        value = report_status(experiment_output)
+    except ReportError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(value, indent=None if json_output else 2, sort_keys=True))
+
+
+@report_app.command("verify")
+def report_verify(report_root: Path) -> None:
+    """Verify checksums and identity links for a derived report."""
+    try:
+        manifest = verify_report(report_root)
+    except ReportError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Verified report {manifest['report_id']!r}: {len(manifest['files'])} files")
+
+
+@report_app.command("export-public")
+def report_export_public(
+    experiment_output: Path,
+    output: Path = typer.Option(..., "--output", help="New lightweight publication directory."),
+    report_root: Path | None = typer.Option(None, "--report-root", help="Existing derived report directory; default is EXPERIMENT_OUTPUT/report-v1."),
+) -> None:
+    """Create a non-overwriting sanitized publication export from report-v1."""
+    try:
+        destination = export_public(report_root or experiment_output / "report-v1", output)
+    except ReportError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"public_export={destination}")
 
 
 @backend_app.command("validate")

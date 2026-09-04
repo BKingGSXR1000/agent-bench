@@ -172,7 +172,7 @@ smokes remain immutable diagnostic evidence. M9C remains unstarted.
 
 ## M9C — Reporting / DuckDB / Parquet / HTML / Charts
 
-Status: pending
+Status: completed
 
 Introduce only now as required:
 - Parquet/PyArrow
@@ -198,6 +198,13 @@ Implement cross-run reports:
 - deterministic tables
 
 All interpolation and aggregation must follow docs/REPORTING.md exactly.
+
+Implemented `report-schema-v1`: verified derived ingestion, stable Parquet
+tables, a DuckDB database/views, Type-7 aggregate summaries, provenance-safe
+timing/context series and markers, offline static HTML/SVG, checksummed report
+manifests, public-safe exports, and raw-archive metadata. M9C was validated
+against the read-only M9B v3 smoke as `PARTIAL EXPERIMENT — 1 / 135 completed`;
+no model or harness execution was performed.
 
 ## M10 — Manual review workflow
 

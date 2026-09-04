@@ -1,6 +1,6 @@
 # Agent Bench Deterministic Reporting
 
-Status: Milestone M0 reporting specification  
+Status: Milestone M9C implemented reporting contract
 Specification version: 1.0.0
 
 ## 1. Purpose and boundary
@@ -9,7 +9,7 @@ Reports expose deterministic metrics, context trajectories, termination outcomes
 
 M0 defines report data and chart semantics only. It does not implement plotting, HTML, a server, or a UI.
 
-Every report records its schema/specification version, generator version, input artifact IDs/digests, filters, grouping keys, and generation timestamp. Regeneration writes a new versioned artifact and does not overwrite sealed inputs.
+Every report records its schema/specification version, generator version, input artifact IDs/digests, filters, and grouping keys. Regeneration writes a new versioned artifact and does not overwrite sealed inputs. M9C deliberately excludes a volatile generation timestamp from identity-bearing derived content. The concrete report layout, SQL views, public-export boundary, and implementation commands are in `REPORTING_M9C.md`.
 
 ## 2. General rules
 
@@ -45,7 +45,7 @@ Links target immutable/downloadable artifacts, not transient worktree paths. Sen
 
 ### 3.2 Context versus absolute elapsed time
 
-The x-axis is elapsed task time in seconds from `task_start`. The y-axis is context utilization percent; an optional companion chart uses absolute context tokens.
+The x-axis is elapsed task time in seconds from `task_start`. M9C's rendered task-relative view additionally treats the first real task inference request as x=0 so auxiliary/title requests are never shown as task context; it preserves those requests separately as overhead. The y-axis is context utilization percent; an optional companion chart uses absolute context tokens.
 
 Each observed LLM request contributes one point:
 
