@@ -6,6 +6,7 @@ import hashlib
 import re
 from collections import deque
 
+from agent_bench.backend import seed_for_repetition
 from agent_bench.models import (
     ExperimentDefinition,
     HarnessDefinition,
@@ -123,7 +124,11 @@ def _make_run_definition(
         "baseline_revision": experiment.baseline_revision,
         "fixed_environment_id": experiment.fixed_environment.fixed_environment_id,
         "fixed_environment_digest": experiment.fixed_environment.definition_digest,
-        "generation_seed": experiment.fixed_environment.generation.seed,
+        "generation_seed": (
+            seed_for_repetition(repetition_index)
+            if experiment.fixed_environment.generation.seed_control == "controlled"
+            else None
+        ),
         "generation_seed_control": (
             experiment.fixed_environment.generation.seed_control
         ),

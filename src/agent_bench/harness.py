@@ -33,6 +33,7 @@ class HarnessRunPaths:
     xdg_config_home: Path
     xdg_cache_home: Path
     xdg_data_home: Path
+    xdg_state_home: Path
     harness_state: Path
 
     def environment(self) -> dict[str, str]:
@@ -42,6 +43,7 @@ class HarnessRunPaths:
             "XDG_CONFIG_HOME": str(self.xdg_config_home),
             "XDG_CACHE_HOME": str(self.xdg_cache_home),
             "XDG_DATA_HOME": str(self.xdg_data_home),
+            "XDG_STATE_HOME": str(self.xdg_state_home),
             "AGENT_BENCH_HARNESS_STATE": str(self.harness_state),
         }
 

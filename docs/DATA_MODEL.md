@@ -1,6 +1,6 @@
 # Agent Bench Persisted Data Model
 
-Status: Milestone M0 logical model with M1–M4 concrete subsets
+Status: Milestone M0 logical model with M1–M5 concrete subsets
 Specification version: 1.0.0
 
 ## 1. Conventions
@@ -34,6 +34,8 @@ Common conventions:
 | HarnessProfile | Immutable content-addressed/versioned bundle |
 | RunDefinition | Immutable after allocation |
 | RunManifest | Appendable only through defined lifecycle states until sealed; immutable after sealing |
+| CaptureCapabilities | Immutable versioned declaration for one capture boundary combination |
+| BackendEndpointObservation | Immutable exact `/metrics` or `/slots` response observation |
 | EnvironmentSnapshot | Immutable observation |
 | RawEvent | Append-only during capture; immutable after raw stream sealing |
 | NormalizedEvent and event subtypes | Immutable output of one identified normalization version |
@@ -41,6 +43,7 @@ Common conventions:
 | ArtifactManifest | Appendable until preservation verification; immutable after sealing |
 | RunMetrics | Immutable output of one metric-definition/implementation version |
 | ManualReview | Append-only revision records; prior revisions immutable |
+| FailedRunEvidence | Immutable after checksum sealing; existing run/failure destinations are never overwritten |
 
 Generated normalized/metrics datasets can be recomputed only into a new versioned location with new records. Raw records and preserved application artifacts are never rewritten by recomputation.
 
@@ -57,6 +60,7 @@ ExperimentDefinition
  │    └── 1..* HarnessProfile
  └── 1..* RunDefinition
       └── 1 RunManifest
+           ├── 0..1 CaptureCapabilities
            ├── 1 EnvironmentSnapshot
            ├── 0..* RawEvent
            ├── 0..* NormalizedEvent
@@ -66,6 +70,10 @@ ExperimentDefinition
            ├── 1 ArtifactManifest
            ├── 0..* RunMetrics versions
            └── 0..* ManualReview revisions
+
+FailedRunEvidence is an alternate pre-task terminal branch keyed by `run_id`.
+It exists when preflight/startup/readiness prevents creation of the ordinary
+sealed result topology; it never masquerades as a successful ArtifactManifest.
 ```
 
 An experiment references definitions by ID plus immutable digest/version. A run definition selects one harness profile, prompt, and repetition from that experiment. A run manifest binds those requested selections to observed identities and artifacts.
@@ -258,7 +266,8 @@ Required fields:
 - resolved baseline repository and full commit ID;
 - resolved prompt/profile paths and verified digests;
 - observed model path, filename, size, SHA256, and GGUF metadata;
-- observed backend executable path, digest, version/build/commit, full argv array, working directory, and redacted environment;
+- observed backend executable path, digest, version/build/commit, full argv array,
+  intended run/server seed, working directory, and redacted environment;
 - configured and backend-observed request/generation parameters as distinct structures;
 - hardware identity reference and environment snapshot reference;
 - isolated directory mapping recorded in redacted/portable form;
@@ -281,13 +290,52 @@ Required fields:
 - monotonic elapsed time when task timing has begun;
 - OS/kernel, architecture, hostname policy, locale, timezone, Python/runtime, container/cgroup, and relevant library/driver versions;
 - CPU and memory observations;
-- GPU identity/UUID, utilization, VRAM, temperature, power/performance state, and competing GPU processes where available;
+- GPU identity/UUID, utilization, exact reported total/used/free VRAM,
+  temperature, power/performance state, and competing GPU processes where
+  available;
 - allowlisted non-secret environment variables;
 - redacted-secret presence metadata;
 - collection command/tool versions and per-field availability/errors; and
 - snapshot digest.
 
+Current-occupancy decisions require a newly collected live snapshot. The
+snapshot records source command argv and UTC collection time; historical output
+may be retained as evidence but cannot satisfy a later run's preflight.
+
 Multiple snapshots may exist; the manifest identifies those required by policy.
+
+### 5.2.1 CaptureCapabilities
+
+M5 implements a dedicated immutable capability declaration and references it
+from `RunManifest`. Each named observation uses exactly one method:
+`api_exact`, `proxy_exact`, `harness_exact`, `reconstructed`, or `unavailable`.
+Fields cover raw requests/responses, request parameters, input/output/reasoning
+tokens, context, reasoning content, finish reason, tools/results, compaction,
+serialized-history validation, and empty historical think-block detection.
+Notes qualify conditional API exposure. An unavailable capability is never
+upgraded merely because one run happens to contain a similarly named field.
+The field is optional only for backward compatibility with pre-M5 run
+manifests; controlled runs created after M5 must reference a declaration.
+
+### 5.2.2 FailedRunEvidence
+
+M5 implements the alternate immutable layout `runs/<run-id>/failure/` for
+precondition, backend identity/hash/port/GPU, startup, readiness, and applicable
+preservation failures. Its versioned manifest records the primary class and
+reason; `events.jsonl` records every deterministic preflight check plus the
+terminal failure; `environment.json` contains the resolved invocation,
+preflight report, profile digest, and CaptureCapabilities; stdout/stderr are
+retained; and `checksums.sha256` covers every other evidence file. Creation is
+exclusive and checksum verification precedes publication.
+
+### 5.2.3 BackendEndpointObservation
+
+M5 represents a sampled llama-server `/metrics` or `/slots` response as an
+immutable versioned record containing its UTC observation time, HTTP status,
+content type, exact body bytes encoded as base64, body SHA256, parsed JSON when
+valid, and `llama_server_endpoint_exact` provenance. It does not infer context
+values that the endpoint did not expose. Request correlation is deferred until
+the real run controller has a harness boundary.
 
 ### 5.3 RawEvent
 

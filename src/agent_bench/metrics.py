@@ -127,17 +127,50 @@ def calculate_run_metrics(artifact_path: Path) -> RunMetrics:
     _validate_event_provenance(raw_events, events)
 
     diagnostics: list[str] = []
-    complete_capture = run_manifest.adapter_id == "fake-harness"
+    capabilities = run_manifest.capture_capabilities
+    complete_llm_capture = (
+        run_manifest.adapter_id == "fake-harness"
+        or (
+            capabilities is not None
+            and capabilities.supports_complete_llm_exchange_capture()
+        )
+    )
+    complete_tool_capture = (
+        run_manifest.adapter_id == "fake-harness"
+        or (
+            capabilities is not None
+            and capabilities.tool_calls == "harness_exact"
+            and capabilities.tool_results == "harness_exact"
+        )
+    )
+    complete_compaction_capture = (
+        run_manifest.adapter_id == "fake-harness"
+        or (capabilities is not None and capabilities.compaction_events != "unavailable")
+    )
     tools = _correlate_tools(events, diagnostics)
     tool_integrity = _tool_identity_valid(events)
     timing = _calculate_timing(
-        run_manifest, events, tools, complete_capture, tool_integrity
+        run_manifest,
+        events,
+        tools,
+        complete_llm_capture,
+        complete_tool_capture,
+        tool_integrity,
     )
     tokens, context = _calculate_tokens_and_context(
-        events, timing.time_to_first_edit_seconds, complete_capture, diagnostics
+        events,
+        timing.time_to_first_edit_seconds,
+        complete_llm_capture,
+        diagnostics,
+        complete_compaction_capture=complete_compaction_capture,
     )
     behavior = _calculate_behavior(
-        events, tools, complete_capture, tool_integrity, diagnostics
+        events,
+        tools,
+        complete_llm_capture,
+        tool_integrity,
+        diagnostics,
+        complete_tool_capture=complete_tool_capture,
     )
     derived = _calculate_derived(timing, tokens, behavior)
     git_result, git_summary = _calculate_git(root, diagnostics)
@@ -176,7 +209,8 @@ def _calculate_timing(
     manifest: RunManifest,
     events: tuple[NormalizedEvent, ...],
     tools: tuple[_ToolCall, ...],
-    complete_capture: bool,
+    complete_llm_capture: bool,
+    complete_tool_capture: bool,
     tool_integrity: bool,
 ) -> TimingMetrics:
     wall = _available(
@@ -187,14 +221,16 @@ def _calculate_timing(
     )
     requests = [event for event in events if event.event_kind == "llm_request"]
     responses = [event for event in events if event.event_kind == "llm_response"]
-    llm_time = _interval_sum(requests, responses, "request_id", "seconds", complete_capture)
-    if tool_integrity and complete_capture:
-        tool_time = _tool_interval_sum(tools, lambda call: True, complete_capture)
+    llm_time = _interval_sum(
+        requests, responses, "request_id", "seconds", complete_llm_capture
+    )
+    if tool_integrity and complete_tool_capture:
+        tool_time = _tool_interval_sum(tools, lambda call: True, complete_tool_capture)
         shell_time = _tool_interval_sum(
             tools,
             lambda call: call.category == "shell"
             or (call.category == "test" and call.start.payload.get("uses_shell") is True),
-            complete_capture,
+            complete_tool_capture,
         )
     else:
         reason = "invalid_source" if not tool_integrity else "capture_incomplete"
@@ -212,22 +248,22 @@ def _calculate_timing(
         shell_execution_time_seconds=shell_time,
         time_to_first_llm_request_seconds=(
             _first_elapsed(requests, "requests")
-            if complete_capture
+            if complete_llm_capture
             else _unavailable("seconds", "capture_incomplete")
         ),
         time_to_first_tool_call_seconds=(
             _first_elapsed([call.start for call in tools], "calls")
-            if tool_integrity and complete_capture
+            if tool_integrity and complete_tool_capture
             else _unavailable("seconds", "invalid_source" if not tool_integrity else "capture_incomplete")
         ),
         time_to_first_edit_seconds=(
             _first_elapsed(edit_starts, "calls")
-            if tool_integrity and complete_capture
+            if tool_integrity and complete_tool_capture
             else _unavailable("seconds", "invalid_source" if not tool_integrity else "capture_incomplete")
         ),
         time_to_first_test_command_seconds=(
             _first_elapsed(test_starts, "calls")
-            if tool_integrity and complete_capture
+            if tool_integrity and complete_tool_capture
             else _unavailable("seconds", "invalid_source" if not tool_integrity else "capture_incomplete")
         ),
     )
@@ -236,9 +272,13 @@ def _calculate_timing(
 def _calculate_tokens_and_context(
     events: tuple[NormalizedEvent, ...],
     first_edit: ScalarMetric,
-    complete_capture: bool,
+    complete_llm_capture: bool,
     diagnostics: list[str],
+    *,
+    complete_compaction_capture: bool | None = None,
 ) -> tuple[TokenMetrics, ContextMetrics]:
+    if complete_compaction_capture is None:
+        complete_compaction_capture = complete_llm_capture
     requests = [event for event in events if event.event_kind == "llm_request"]
     responses = [event for event in events if event.event_kind == "llm_response"]
     response_by_request: dict[str, NormalizedEvent] = {}
@@ -279,15 +319,16 @@ def _calculate_tokens_and_context(
     request_usages: list[RequestTokenUsage] = []
     context_points: list[ContextRequestPoint] = []
     input_values: list[int] = []
+    input_source_events: list[NormalizedEvent] = []
     output_values: list[int] = []
     reasoning_values: list[int] = []
     visible_values: list[int] = []
-    input_complete = bool(requests) and request_identity_valid and complete_capture
+    input_complete = bool(requests) and request_identity_valid and complete_llm_capture
     output_complete = (
         bool(requests)
         and request_identity_valid
         and response_identity_valid
-        and complete_capture
+        and complete_llm_capture
         and len(response_by_request) >= len(requests)
     )
     reasoning_complete = output_complete
@@ -298,6 +339,8 @@ def _calculate_tokens_and_context(
         request_id = request.payload.get("request_id")
         response = response_by_request.get(request_id) if isinstance(request_id, str) else None
         input_metric = _token_metric(request, "context_tokens")
+        if input_metric.availability != "available" and response is not None:
+            input_metric = _token_metric(response, "input_tokens")
         output_metric = (
             _token_metric(response, "output_tokens")
             if response is not None
@@ -315,6 +358,14 @@ def _calculate_tokens_and_context(
         )
         if input_metric.availability == "available":
             input_values.append(int(input_metric.value))
+            input_source_events.append(
+                response
+                if (
+                    response is not None
+                    and response.event_id in input_metric.provenance.source_event_ids
+                )
+                else request
+            )
         else:
             input_complete = False
         if output_metric.availability == "available":
@@ -365,7 +416,9 @@ def _calculate_tokens_and_context(
         )
         previous_context = input_metric
 
-    input_total = _aggregate_tokens(input_values, input_complete, requests)
+    input_total = _aggregate_tokens(
+        input_values, input_complete, input_source_events
+    )
     output_total = _aggregate_tokens(output_values, output_complete, responses)
     reasoning_total = _aggregate_tokens(reasoning_values, reasoning_complete, responses)
     visible_total = _aggregate_tokens(visible_values, visible_complete, responses)
@@ -375,7 +428,7 @@ def _calculate_tokens_and_context(
         indexed, response_by_request, first_edit
     )
 
-    complete_context = complete_capture and request_identity_valid and bool(context_points) and all(
+    complete_context = complete_llm_capture and request_identity_valid and bool(context_points) and all(
         point.context_used_tokens.availability == "available"
         and point.context_utilization_percent.availability == "available"
         for point in context_points
@@ -421,7 +474,7 @@ def _calculate_tokens_and_context(
             "normalized_event_exact",
             events=tuple(event.event_id for event in compaction_events),
         )
-        if complete_capture and compaction_identity_valid
+        if complete_compaction_capture and compaction_identity_valid
         else _unavailable(
             "compactions",
             "invalid_source" if not compaction_identity_valid else "source_not_exposed",
@@ -463,10 +516,14 @@ def _calculate_tokens_and_context(
 def _calculate_behavior(
     events: tuple[NormalizedEvent, ...],
     tools: tuple[_ToolCall, ...],
-    complete_capture: bool,
+    complete_llm_capture: bool,
     tool_integrity: bool,
     diagnostics: list[str],
+    *,
+    complete_tool_capture: bool | None = None,
 ) -> BehaviorMetrics:
+    if complete_tool_capture is None:
+        complete_tool_capture = complete_llm_capture
     requests = [event for event in events if event.event_kind == "llm_request"]
     request_ids = [event.payload.get("request_id") for event in requests]
     request_indices = [event.payload.get("request_index") for event in requests]
@@ -478,8 +535,8 @@ def _calculate_behavior(
     )
     llm_requests = (
         _available(len(requests), "requests", "normalized_event_exact", events=tuple(e.event_id for e in requests))
-        if complete_capture and requests_valid
-        else _unavailable("requests", "capture_incomplete" if not complete_capture else "invalid_source")
+        if complete_llm_capture and requests_valid
+        else _unavailable("requests", "capture_incomplete" if not complete_llm_capture else "invalid_source")
     )
     responses = [event for event in events if event.event_kind == "llm_response"]
     response_ids = [event.payload.get("response_id") for event in responses]
@@ -492,7 +549,7 @@ def _calculate_behavior(
         categories[call.category] += 1
     tool_event_ids = tuple(call.start.event_id for call in tools)
     count_method = "normalized_event_exact"
-    tool_metrics_valid = tool_integrity and complete_capture
+    tool_metrics_valid = tool_integrity and complete_tool_capture
     total = (
         _available(len(tools), "calls", count_method, events=tool_event_ids)
         if tool_metrics_valid
@@ -517,8 +574,10 @@ def _calculate_behavior(
         or (call.category == "test" and call.start.payload.get("uses_shell") is True)
         for call in tools
     )
-    if not complete_capture:
-        diagnostics.append("capture completeness is not declared for this adapter")
+    if not complete_llm_capture:
+        diagnostics.append("LLM capture completeness is not declared for this adapter")
+    if not complete_tool_capture:
+        diagnostics.append("tool capture completeness is not declared for this adapter")
     count = lambda value: (
         _available(value, "calls", count_method, events=tool_event_ids)
         if tool_metrics_valid
@@ -537,10 +596,10 @@ def _calculate_behavior(
                 "normalized_event_exact",
                 events=tuple(event.event_id for event in responses),
             )
-            if complete_capture and responses_valid
+            if complete_llm_capture and responses_valid
             else _unavailable(
                 "responses",
-                "capture_incomplete" if not complete_capture else "invalid_source",
+                "capture_incomplete" if not complete_llm_capture else "invalid_source",
             )
         ),
         tool_calls_total=total,
@@ -569,7 +628,7 @@ def _calculate_behavior(
         repeated_reads_of_unchanged_files=repeated_reads if tool_metrics_valid else _unavailable("reads", "invalid_source" if not tool_integrity else "capture_incomplete"),
         repeated_identical_shell_commands=repeated_shell if tool_metrics_valid else _unavailable("calls", "invalid_source" if not tool_integrity else "capture_incomplete"),
         turns_with_reasoning_but_no_action=(
-            reasoning_only if complete_capture
+            reasoning_only if complete_llm_capture and complete_tool_capture
             else _unavailable("turns", "capture_incomplete")
         ),
     )
@@ -1054,6 +1113,8 @@ def _tokens_before_edit(
         if response is None or response.elapsed_ns is None or response.elapsed_ns > boundary_ns:
             continue
         input_metric = _token_metric(request, "context_tokens")
+        if input_metric.availability != "available":
+            input_metric = _token_metric(response, "input_tokens")
         output_metric = _token_metric(response, "output_tokens")
         reasoning_metric = _token_metric(response, "reasoning_tokens")
         if input_metric.availability != "available" or output_metric.availability != "available":

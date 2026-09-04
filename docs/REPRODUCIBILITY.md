@@ -1,13 +1,16 @@
 # Agent Bench Reproducibility Contract
 
-Status: Milestone M0 reproducibility specification  
+Status: Milestone M5 fixed-backend implementation contract
 Specification version: 1.0.0
 
 ## 1. Reproducibility objective
 
 An Agent Bench run is reproducible when a later operator can identify the exact task inputs and software/hardware configuration, reconstruct the isolated starting state, inspect the exact invocation, and verify the preserved result bytes. Reproducibility does not claim that nondeterministic GPU execution or an uncontrollable harness will yield byte-identical model output; it requires that every controllable input and known source of variation be fixed and recorded.
 
-Benchmark v1 treats model, quantization, backend, hardware, server configuration, and generation configuration as fixed experiment invariants.
+Benchmark v1 treats model, quantization, backend, hardware, and server
+configuration as fixed experiment invariants. Sampling defaults are fixed.
+Output/reasoning limits deliberately approved as harness-profile treatments
+remain separate request-level observations.
 
 ## 2. Git baseline identity
 
@@ -28,7 +31,12 @@ The complete result is preserved separately, with result-tree/snapshot identity 
 
 ## 3. Model identity
 
-The fixed Qwen 3.8 27B Q4 GGUF definition records expected filename, byte size, SHA256, quantization variant, and relevant GGUF metadata. Before each run, the executable model file is streamed through SHA256 verification; filename or path alone is insufficient.
+The fixed model is
+`/mnt/starhunter/AI/models/Qwen3.8-27B/Qwen3.8-27B-UD-Q4_K_XL.gguf`, size
+17,923,394,624 bytes, SHA256
+`bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372`.
+Before each run, the file is streamed through SHA256 verification; filename or
+path alone is insufficient.
 
 The run manifest records:
 
@@ -40,11 +48,17 @@ The run manifest records:
 - GGUF metadata extraction tool/version and captured metadata; and
 - verification time/result.
 
-A mismatch is `precondition_failed`; execution must not continue with a different file.
+A hash/size mismatch is `model_hash_mismatch`; missing or invalid input is
+`precondition_failed`. Execution never continues with a different file.
 
 ## 4. llama.cpp identity
 
-The fixed backend definition and each observed run record:
+M5 pins `/home/bking/AI/llama.cpp/build/bin/llama-server`, executable SHA256
+`92a71ff10ed10f9a24d5af934770f86e1ac6ef0dfccb7d5612f73a2670bb123b`,
+source repository `/home/bking/AI/llama.cpp`, commit
+`dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe`, and version/build markers
+`0.1.2-dev`, build 10517, commit `dc72703fc`. The fixed backend definition and
+each observed run record:
 
 - resolved `llama-server` executable path;
 - executable byte size and SHA256 when policy pins the binary;
@@ -58,7 +72,9 @@ Missing required identity fields cause a precondition failure. Optional unavaila
 
 ## 5. Exact llama-server invocation representation
 
-M0 does not choose command-line values. The eventual fixed invocation is represented structurally and is persisted both configured and resolved:
+M5 fixes the invocation in `environment/backend-v1.yaml` and documents every
+argument in `BENCHMARK_ENVIRONMENT.md`. It is represented structurally and
+persisted both configured and resolved:
 
 ```yaml
 schema_version: 1.0.0
@@ -67,6 +83,7 @@ argv:
   - /absolute/resolved/path/to/llama-server
   - "<one argument token>"
   - "<its value token>"
+run_seed: 1001
 working_directory: /absolute/resolved/working/directory
 environment:
   allowed_non_secret_name: exact_value
@@ -79,6 +96,11 @@ stderr_artifact: raw/backend/stderr.log
 
 `argv` is the authoritative token array passed to process creation; a display-only shell-escaped command is also generated with a named escaping algorithm for human use. Arguments are never stored only as an opaque script or a shell string. Defaults relied upon from llama.cpp are materialized into the resolved configuration when they can affect results, with their source/version.
 
+For repetition `r`, the resolved invocation records `run_seed = 1000 + r` and
+passes the same value through the pinned build's explicit `--seed` option. This
+server/run seed is not conflated with the independently captured seed field in
+an HTTP generation request.
+
 Server-start parameters are separate from per-request generation parameters. The configured template, fully resolved invocation, and observed process identity all receive digests.
 
 ## 6. Request and generation parameters
@@ -88,7 +110,8 @@ The fixed request configuration represents every applicable value, including:
 - temperature;
 - `top_p`, `top_k`, and `min_p`;
 - seed;
-- maximum output tokens;
+- maximum output tokens when supplied by a harness profile (M5 intentionally
+  has no server-wide output cap);
 - stop sequences as an ordered array of exact strings/bytes;
 - reasoning configuration;
 - chat template and tokenizer identity;
@@ -120,7 +143,15 @@ The fixed hardware profile declares required identity and precondition threshold
 - locale, timezone, Python/runtime, and relevant library versions; and
 - the collector commands/tools and their versions.
 
-Dynamic values are timestamped snapshots, not part of the immutable expected hardware identity. Failed required thresholds yield `precondition_failed` rather than an unmarked run under different conditions.
+Dynamic values are timestamped snapshots, not part of the immutable expected
+hardware identity. Production preflight performs fresh live `nvidia-smi` GPU and
+compute-process queries and records their commands and UTC observation time;
+cached or historical output is not an accepted source for current occupancy.
+The fixed RTX identity and non-exempt target-GPU process policy are enforced.
+Exact total/used/free VRAM is evidence, but no hard free/used threshold is
+applied; the real backend load is the capacity test. Failed required
+preconditions yield `precondition_failed` rather than an unmarked run under
+different conditions.
 
 ## 8. Fresh harness homes and state isolation
 
@@ -130,6 +161,7 @@ Every run creates new directories that did not exist for any earlier run. At min
 - `XDG_CONFIG_HOME`;
 - `XDG_CACHE_HOME`;
 - `XDG_DATA_HOME`;
+- `XDG_STATE_HOME`;
 - harness-native config/state/session/memory directories; and
 - controllable temporary/cache directories.
 
@@ -153,7 +185,10 @@ All allowed non-secret names and exact values that may affect behavior are store
 
 Secrets are never written to raw logs, manifests, normalized data, metrics, reports, checksums lists containing values, or exported datasets. Redaction occurs before durable capture at known ingress points.
 
-The redaction policy is versioned and records secret names, source mechanisms, presence, and redaction actions without recording values. Exact known secret values and approved encoded variants are filtered from captured streams. Structured payloads redact by field before serialization. The system validates preserved artifacts against registered secret fingerprints without persisting the secret itself.
+M5 redacts authorization/API-key/cookie header values and recognized structured
+secret fields before durable proxy capture while forwarding the original
+request. General registered-secret fingerprint scanning remains a later
+hardening step and is not claimed by the M5 capture capability.
 
 If safe redaction cannot be guaranteed for a required capture source, the run fails preflight or that capture is disabled and explicitly marked unavailable according to policy. Post-hoc mutation of sealed raw logs is prohibited.
 
@@ -177,9 +212,11 @@ Readiness records:
 - start/success/failure timestamps; and
 - all probe responses/log references.
 
-Warmup is either `disabled` or `enabled` with exact request bytes, parameters, expected completion condition, timeout, and repetition count. If enabled, it occurs after readiness and before `task_start`, uses no benchmark prompt or run worktree content, and is excluded from task timing and task token/tool metrics. Warmup raw evidence and token/time values are stored in a separate phase.
-
-M0 intentionally does not select the actual probe, warmup prompt, or parameter values. They must be selected and frozen before controlled execution is implemented.
+Readiness is HTTP 200 with JSON status `ok` from `/health`, with a 900-second
+startup deadline. llama.cpp's built-in startup/model warmup is enabled. No
+synthetic LLM warmup conversation is sent. Backend creation, model loading,
+built-in warmup, readiness, and capture-proxy readiness precede `task_start` and
+are excluded from task token/tool metrics.
 
 ## 13. Timekeeping
 
@@ -204,7 +241,10 @@ Every controllable random source has a separately named seed. At minimum:
 - harness-native random behavior uses named seeds when the harness exposes control; and
 - any deterministic fixture/test generator records its seed.
 
-Seed assignment across matrix cells is specified before execution and is stable under reruns of the same frozen experiment definition. An uncontrollable source is marked `uncontrollable`, not assigned a fictional seed.
+For controlled generation, one-based repetition `r` maps to `1000 + r`; the
+same repetition receives the same intended seed across harnesses. The proxy
+records the request-observed seed separately. An uncontrollable or omitted seed
+is marked as such, not assigned a fictional effective value.
 
 ## 15. Version pinning
 
@@ -238,6 +278,11 @@ Sealing order is:
 8. read back and verify every required file.
 
 The manifest/checksum representation defines how its own digest field is omitted during hashing to avoid recursion. In the M2 subset, the sorted checksum listing includes `manifest.json` and excludes only itself; the manifest identifies the listing and does not contain its own digest. Later full-run sealing may add a separate non-self-referential sealed-manifest digest. Any verification failure yields `preservation_failed` and prevents temporary-worktree deletion.
+
+Failures before a normal result artifact exists use the exclusive immutable
+`runs/<run-id>/failure/` layout defined in `DATA_MODEL.md` and
+`BENCHMARK_ENVIRONMENT.md`. Its checksum inventory covers the manifest, event
+stream, environment, stdout, and stderr; verification precedes publication.
 
 ## 17. Replay record
 

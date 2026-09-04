@@ -15,6 +15,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_bench.capture import (
+    CaptureCapabilities,
+    fake_harness_capture_capabilities,
+)
 from agent_bench.events import (
     RawEvent,
     RawEventWriter,
@@ -88,6 +92,7 @@ class IsolationPathsRecord(BaseModel):
     xdg_config_home: Path
     xdg_cache_home: Path
     xdg_data_home: Path
+    xdg_state_home: Path
     harness_state: Path
     raw_events_during_execution: Path
     normalized_events_during_execution: Path
@@ -101,6 +106,7 @@ class IsolationPathsRecord(BaseModel):
             "xdg_config_home",
             "xdg_cache_home",
             "xdg_data_home",
+            "xdg_state_home",
             "harness_state",
             "raw_events_during_execution",
             "normalized_events_during_execution",
@@ -143,6 +149,7 @@ class RunManifest(BaseModel):
     task_elapsed_ns: int = Field(ge=0)
     observed_execution_outcome: ExecutionOutcome
     terminal_raw_event_ids: tuple[str, ...] = Field(min_length=1)
+    capture_capabilities: CaptureCapabilities | None = None
     record_digest: Sha256
 
     @field_validator("task_start_timestamp_utc", "task_end_timestamp_utc")
@@ -157,7 +164,11 @@ class RunManifest(BaseModel):
         if self.task_end_timestamp_utc < self.task_start_timestamp_utc:
             raise ValueError("task end timestamp precedes task start")
         expected = canonical_sha256(
-            self.model_dump(mode="json", exclude={"record_digest"})
+            self.model_dump(
+                mode="json",
+                exclude={"record_digest"},
+                exclude_computed_fields=True,
+            )
         )
         if self.record_digest != expected:
             raise ValueError("record_digest does not match run manifest content")
@@ -169,7 +180,9 @@ class RunManifest(BaseModel):
         content = {"schema_version": "1.0.0", **values}
         draft = cls.model_construct(**content, record_digest="0" * 64)
         canonical_content = draft.model_dump(
-            mode="json", exclude={"record_digest"}
+            mode="json",
+            exclude={"record_digest"},
+            exclude_computed_fields=True,
         )
         return cls.model_validate(
             {
@@ -199,6 +212,7 @@ class _RuntimePaths:
     xdg_config: Path
     xdg_cache: Path
     xdg_data: Path
+    xdg_state: Path
     harness_state: Path
     raw_events: Path
     normalized_events: Path
@@ -264,6 +278,7 @@ def execute_run(
             xdg_config_home=runtime.xdg_config,
             xdg_cache_home=runtime.xdg_cache,
             xdg_data_home=runtime.xdg_data,
+            xdg_state_home=runtime.xdg_state,
             harness_state=runtime.harness_state,
         )
         run_manifest = _execute_and_record(
@@ -460,6 +475,7 @@ def _execute_and_record(
         xdg_config_home=paths.xdg_config_home,
         xdg_cache_home=paths.xdg_cache_home,
         xdg_data_home=paths.xdg_data_home,
+        xdg_state_home=paths.xdg_state_home,
         harness_state=paths.harness_state,
         raw_events_during_execution=runtime.raw_events,
         normalized_events_during_execution=runtime.normalized_events,
@@ -486,6 +502,11 @@ def _execute_and_record(
         observed_execution_outcome=outcome,
         terminal_raw_event_ids=tuple(
             event.raw_event_id for event in terminal_events
+        ),
+        capture_capabilities=(
+            fake_harness_capture_capabilities()
+            if adapter.adapter_id == "fake-harness"
+            else getattr(adapter, "capture_capabilities", None)
         ),
     )
 
@@ -528,8 +549,9 @@ def _create_runtime_paths(root: Path, run_id: str) -> _RuntimePaths:
     xdg_config = run_root / "xdg-config"
     xdg_cache = run_root / "xdg-cache"
     xdg_data = run_root / "xdg-data"
+    xdg_state = run_root / "xdg-state"
     harness_state = run_root / "harness-state"
-    for path in (home, xdg_config, xdg_cache, xdg_data, harness_state):
+    for path in (home, xdg_config, xdg_cache, xdg_data, xdg_state, harness_state):
         path.mkdir()
     return _RuntimePaths(
         root=run_root,
@@ -537,6 +559,7 @@ def _create_runtime_paths(root: Path, run_id: str) -> _RuntimePaths:
         xdg_config=xdg_config,
         xdg_cache=xdg_cache,
         xdg_data=xdg_data,
+        xdg_state=xdg_state,
         harness_state=harness_state,
         raw_events=run_root / RAW_EVENTS_PATH,
         normalized_events=run_root / NORMALIZED_EVENTS_PATH,
@@ -548,7 +571,7 @@ def _write_model(path: Path, model: BaseModel) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (
         json.dumps(
-            model.model_dump(mode="json"),
+            model.model_dump(mode="json", exclude_computed_fields=True),
             allow_nan=False,
             ensure_ascii=False,
             separators=(",", ":"),

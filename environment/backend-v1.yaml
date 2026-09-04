@@ -1,0 +1,95 @@
+schema_version: 1.0.0
+profile_id: qwen38-agent-bench-v1
+model_name: Qwen 3.8 27B
+quantization: UD-Q4_K_XL
+model:
+  path: /mnt/starhunter/AI/models/Qwen3.8-27B/Qwen3.8-27B-UD-Q4_K_XL.gguf
+  size_bytes: 17923394624
+  sha256: bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372
+chat_template:
+  path: /home/bking/AI/agent-bench/environment/templates/qwen38-agent-bench-v1.jinja
+  size_bytes: 10018
+  sha256: 2d59a4438d68dc818c5a75db4edcf4c588e0976b113c5c87def7fc9c1168e955
+executable:
+  path: /home/bking/AI/llama.cpp/build/bin/llama-server
+  size_bytes: 17920
+  sha256: 92a71ff10ed10f9a24d5af934770f86e1ac6ef0dfccb7d5612f73a2670bb123b
+llama_cpp_repository: /home/bking/AI/llama.cpp
+llama_cpp_commit: dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe
+version_output_contains:
+  - 0.1.2-dev
+  - build 10517
+  - commit dc72703fc
+local_libraries:
+  - path: /home/bking/AI/llama.cpp/build/bin/libllama-server-impl.so
+    size_bytes: 7685208
+    sha256: 9246386bc6d1331fa1a380d1d223c61b3f01659952d5e40d648ad91446cfcf8a
+  - path: /home/bking/AI/llama.cpp/build/bin/libllama-common.so.0.1.2
+    size_bytes: 6239088
+    sha256: d9b07924efb8cdf45d9a578b3c1b9fdc269ea0ed7673d984611fb129f8d29cda
+  - path: /home/bking/AI/llama.cpp/build/bin/libmtmd.so.0.1.2
+    size_bytes: 1898240
+    sha256: 942e5833aa17899b7adceffb852bfdd29cb4f0e5a6fd0ad9569ad789333f4281
+  - path: /home/bking/AI/llama.cpp/build/bin/libllama.so.0.1.2
+    size_bytes: 4479312
+    sha256: 1e1bcef9805b8a2a05facf3dfcdcdb88431b633427488da76f6984860d721f40
+  - path: /home/bking/AI/llama.cpp/build/bin/libggml.so.0.20.2
+    size_bytes: 56016
+    sha256: a5cd041566b8884ce0e37144144ced3e6fd9bedc7a3e392c50ebd41069c72fde
+  - path: /home/bking/AI/llama.cpp/build/bin/libggml-base.so.0.20.2
+    size_bytes: 922632
+    sha256: 776d4becc7e50d59678c0a2d2ee468ff8a358ad6fa4e623d9addca12a690271f
+  - path: /home/bking/AI/llama.cpp/build/bin/libggml-cpu.so.0.20.2
+    size_bytes: 1337936
+    sha256: fe38c4559a0154321d156b5d82f683d1d8d7418c64f95575991243bbf4e803fa
+  - path: /home/bking/AI/llama.cpp/build/bin/libggml-cuda.so.0.20.2
+    size_bytes: 92902888
+    sha256: 102de940b6a1602ad4efae6c9320d96337813cad71e3ff1dc1ef1994ab0a21a1
+gpu:
+  expected_uuid: GPU-63f9c2ad-4dbc-962b-b314-a652bf28fc0d
+  expected_name: NVIDIA GeForce RTX 3090
+  minimum_total_vram_mib: 24576
+  maximum_exempt_desktop_process_vram_mib: 512
+  exempt_desktop_process_markers:
+    - Xorg
+    - Xwayland
+    - gnome-shell
+    - gnome-remote-desktop-daemon
+    - kwin
+    - plasmashell
+    - code --type=gpu-process
+server:
+  host: 127.0.0.1
+  port: 18080
+  proxy_port: 18081
+  context_size: 107520
+  parallel: 1
+  batch_size: 128
+  ubatch_size: 128
+  split_mode: none
+  main_gpu: 0
+  gpu_layers: all
+  fit: "off"
+  flash_attention: "on"
+  cache_type_k: q8_0
+  cache_type_v: q8_0
+  context_shift: false
+  speculative_type: none
+  prompt_cache: true
+  continuous_batching: true
+  jinja: true
+  reasoning: "on"
+  reasoning_format: deepseek
+  built_in_warmup: true
+  synthetic_warmup: false
+  metrics_endpoint: true
+  slots_endpoint: true
+sampling:
+  temperature: 1.0
+  top_k: 20
+  top_p: 0.95
+  min_p: 0.0
+restart_policy: per_run
+readiness_endpoint: /health
+readiness_timeout_seconds: 900.0
+shutdown_grace_seconds: 10.0

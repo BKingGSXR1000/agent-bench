@@ -23,6 +23,7 @@ def test_cli_help() -> None:
     assert "git" in result.output
     assert "artifact" in result.output
     assert "metrics" in result.output
+    assert "backend" in result.output
     assert "fake-run" in result.output
 
 
@@ -31,6 +32,37 @@ def test_cli_version() -> None:
 
     assert result.exit_code == 0
     assert result.output.strip() == __version__
+
+
+def test_backend_validate_and_show_command_do_not_start_server() -> None:
+    validate = runner.invoke(app, ["backend", "validate"])
+    command = runner.invoke(app, ["backend", "show-command", "--json"])
+
+    assert validate.exit_code == 0, validate.output
+    assert "model_sha256=bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372" in validate.output
+    assert command.exit_code == 0, command.output
+    payload = json.loads(command.output)
+    assert payload["argv"][0] == "/home/bking/AI/llama.cpp/build/bin/llama-server"
+    assert payload["argv"][payload["argv"].index("--ctx-size") + 1] == "107520"
+    assert payload["argv"][payload["argv"].index("--port") + 1] == "18080"
+    assert payload["argv"][payload["argv"].index("--seed") + 1] == "1001"
+    assert payload["run_seed"] == 1001
+
+
+def test_backend_show_command_seed_varies_only_by_repetition() -> None:
+    first = runner.invoke(
+        app, ["backend", "show-command", "--json", "--repetition", "1"]
+    )
+    third = runner.invoke(
+        app, ["backend", "show-command", "--json", "--repetition", "3"]
+    )
+
+    assert first.exit_code == third.exit_code == 0
+    first_payload = json.loads(first.output)
+    third_payload = json.loads(third.output)
+    assert first_payload["run_seed"] == 1001
+    assert third_payload["run_seed"] == 1003
+    assert first_payload["argv"] != third_payload["argv"]
 
 
 def test_cli_validates_experiment(experiment_fixture: ExperimentFixture) -> None:

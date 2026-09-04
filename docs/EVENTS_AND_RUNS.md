@@ -100,8 +100,9 @@ not invent model or token observations.
 ## 6. Isolation and timeout behavior
 
 Each run creates unique temporary directories for the detached Git worktree and
-for `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, harness state,
-raw events, normalized events, and the draft run manifest. The adapter receives
+for `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`,
+`XDG_STATE_HOME`, harness state, raw events, normalized events, and the draft
+run manifest. The adapter receives
 an explicit mapping of the isolated HOME/XDG/state paths; the process-wide user
 environment is not mutated.
 
@@ -157,7 +158,10 @@ artifacts/<run-id>/
 The M3 `RunManifest` records the run-definition digest and selected identities,
 adapter/scenario identity, baseline, execution-host isolation paths, artifact
 event paths, task UTC/monotonic boundaries, direct observed outcome, and terminal
-raw-event references. Its lifecycle state is `execution_complete`; the adjacent
+raw-event references. M5 adds a dedicated optional `CaptureCapabilities` record;
+FakeHarness runs populate their exact fixture capabilities, while future real
+adapters must supply an honest backend/harness combination. Its lifecycle state
+is `execution_complete`; the adjacent
 M2 `manifest.json` remains authoritative for preservation status and result Git
 identity. Both manifests and all M3 evidence are covered by `checksums.sha256`.
 
@@ -189,3 +193,12 @@ agent-bench fake-run EXPERIMENT_PATH RUN_ID OUTPUT_ROOT --scenario success
 
 It prints the run ID, scenario, observed outcome, raw and normalized event paths,
 and sealed artifact path.
+
+## 11. M5 boundary
+
+M5 does not execute a real harness. It supplies proxy-origin `llm_request` and
+`llm_response` raw records already accepted by the M3 normalizer, plus auxiliary
+raw records for safe upstream request evidence, streamed chunks, empty-think
+validation, and backend errors. Unrecognized auxiliary records remain preserved
+raw. Exact API `prompt_tokens` on a correlated response can supply the request's
+context count to M4; no heuristic token estimate is introduced.

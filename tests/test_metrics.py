@@ -278,6 +278,43 @@ def test_missing_context_observation_keeps_point_but_invalidates_aggregates(metr
     assert tokens.input_tokens_total.value is None
 
 
+def test_api_response_prompt_tokens_feed_context_without_estimation(
+    metrics_run: object,
+) -> None:
+    events = list(load_normalized_events(metrics_run.normalized_event_path))  # type: ignore[attr-defined]
+    request_position = next(
+        index for index, event in enumerate(events) if event.event_kind == "llm_request"
+    )
+    request = events[request_position]
+    request_payload = dict(request.payload)
+    expected = request_payload.pop("context_tokens")
+    events[request_position] = request.model_copy(update={"payload": request_payload})
+    response_position = next(
+        index
+        for index, event in enumerate(events)
+        if event.event_kind == "llm_response"
+        and event.payload.get("request_id") == request.payload.get("request_id")
+    )
+    response = events[response_position]
+    events[response_position] = response.model_copy(
+        update={"payload": {**response.payload, "input_tokens": expected}}
+    )
+    first_edit = calculate_run_metrics(
+        metrics_run.artifact_path  # type: ignore[attr-defined]
+    ).timing.time_to_first_edit_seconds
+
+    tokens, context = _calculate_tokens_and_context(
+        tuple(events), first_edit, True, []
+    )
+
+    assert tokens.input_tokens_total.value == 490
+    assert context.context_used_per_request[0].context_used_tokens.value == expected
+    assert (
+        context.context_used_per_request[0].context_used_tokens.provenance.method
+        == "api_exact"
+    )
+
+
 def test_missing_context_max_keeps_tokens_but_utilization_is_unavailable(metrics_run: object) -> None:
     events = list(load_normalized_events(metrics_run.normalized_event_path))  # type: ignore[attr-defined]
     request_position = next(

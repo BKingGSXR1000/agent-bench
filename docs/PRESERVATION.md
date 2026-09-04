@@ -20,6 +20,10 @@ files as supplemental artifacts. M2 preservation remains independent of their
 semantics and includes them in its exact checksum inventory. M4 adds a small
 versioned Git-native numstat record for preserved untracked/ignored files,
 because those files cannot appear in the tracked diff.
+M5 adds a separate `runs/<run-id>/failure/` evidence path for preflight,
+backend-start, and readiness failures that occur before the normal M2 result
+topology can validly exist. It is not a successful `ArtifactManifest`; its
+exclusive creation and checksum contract are specified in `DATA_MODEL.md`.
 
 ## 2. Baseline and worktree safety
 

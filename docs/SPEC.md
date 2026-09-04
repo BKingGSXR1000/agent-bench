@@ -44,7 +44,10 @@ Benchmark v1 does not:
 - rely on a Git diff as the sole preservation mechanism; or
 - introduce DuckDB, Parquet, a web service, charts, HTML reports, or execution machinery in M0.
 
-Adapters, llama.cpp lifecycle management, a logging proxy, worktree creation, execution orchestration, artifact building, manual-review UI, and rendered reports are later milestones.
+OpenCode/Pi/Hermes adapters, full real-run integration, manual-review UI, and
+rendered reports remain later milestones. M2-M5 now provide worktree/result
+preservation, fake execution, metrics, the fixed llama.cpp lifecycle boundary,
+and transparent proxy capture.
 
 ## 3. Fixed benchmark-v1 environment
 
@@ -57,9 +60,12 @@ Every run in a benchmark-v1 experiment uses one fixed environment:
 - one fixed set of server-start parameters; and
 - one fixed set of request/generation parameters.
 
-These properties are recorded in every run manifest but are not matrix dimensions. Validation must fail before task execution if a run cannot prove it is using the experiment's fixed environment. Configured/requested generation values and values observed at the backend boundary are separate records; disagreement is retained rather than reconciled silently.
+These properties are recorded in every run manifest but are not matrix dimensions. Validation must fail before task execution if a run cannot prove it is using the experiment's fixed environment. Configured/requested generation values and values observed at the backend boundary are separate records; disagreement is retained rather than reconciled silently. Controlled repetition `r` uses intended seed `1000 + r`; the resolved server invocation and observed HTTP request retain that seed independently.
 
-The actual model path, digest, llama.cpp build, hardware identity, server arguments, and generation values are deployment inputs and are intentionally not selected in M0.
+The M5 deployment values are frozen in `environment/backend-v1.yaml` and
+documented in `BENCHMARK_ENVIRONMENT.md`. Server identity/settings and sampling
+baseline are fixed; approved future harness-profile output/reasoning treatments
+are recorded at the request boundary rather than made server invariants.
 
 ## 4. Conceptual architecture
 
@@ -73,10 +79,10 @@ The architecture has six boundaries:
 6. **Post-run assessment** stores manual application review and optional qualitative reasoning analysis in separate data layers.
 
 M0 created the package skeleton and these contracts. M1 implemented definition
-and matrix expansion, M2 implements the Git-isolation and preservation boundary
-described in `PRESERVATION.md`, and M3 implements common events and a fake-backed
-single-run lifecycle described in `EVENTS_AND_RUNS.md`. Later boundaries remain
-unimplemented until their roadmap milestones.
+and matrix expansion, M2 the Git-isolation/preservation boundary, M3 common
+events and a fake-backed lifecycle, M4 deterministic metrics, and M5 the fixed
+backend profile, preflight, capture proxy/capabilities, and early-failure
+evidence. Real harness adapters and full real-run integration begin at M6.
 
 ## 5. Experiment definitions
 

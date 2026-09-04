@@ -53,6 +53,15 @@ def test_repetitions_are_one_based_for_every_matrix_cell(
     assert all(indices == [1, 2] for indices in repetitions.values())
 
 
+def test_generation_seed_is_deterministic_by_repetition_across_harnesses(
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    runs = generate_run_definitions(load_experiment(experiment_fixture.path))
+
+    assert {run.generation_seed for run in runs if run.repetition_index == 1} == {1001}
+    assert {run.generation_seed for run in runs if run.repetition_index == 2} == {1002}
+
+
 def test_run_ids_are_unique_human_readable_and_deterministic(
     experiment_fixture: ExperimentFixture,
 ) -> None:

@@ -12,10 +12,11 @@ render charts, or produce cross-run analysis. The authoritative inputs are the
 M2 artifact manifest and Git evidence, the M3 run manifest, and the immutable
 raw and normalized event streams. All are identified by SHA256 in `RunMetrics`.
 
-The only capture-completeness declaration implemented in M4 is for the
-versioned FakeHarness fixture. Real adapters must provide an explicit normalized
-capture-capability contract in M5 or later before a missing native observation
-can be interpreted as an observed zero.
+M5 adds a versioned `CaptureCapabilities` contract. Complete LLM exchanges may
+be declared by exact proxy capture. Complete tool execution and result behavior
+requires harness-exact capture, and compaction metrics require an explicit
+compaction capability; proxy-visible model tool-call structures alone never
+turn missing execution events into observed zeroes.
 
 ## 2. Persisted metric representation
 
@@ -156,10 +157,13 @@ agent-bench metrics show RUN_OR_METRICS_ARTIFACT
 analysis artifact. `show` validates and prints an existing metrics artifact, or
 calculates in memory from a sealed run artifact without writing it.
 
-## 8. Deferred work
+## 8. M5 integration and deferred work
 
-M4 does not implement llama.cpp/backend management, a logging proxy, real
-harness adapters, report rendering, charts, cross-run interpolation, Parquet,
-DuckDB, or qualitative analysis. M5 must supply exact backend/request capture
-and real capture-capability declarations before real-harness metrics can be
-complete.
+M5 supplies exact proxy request/response capture and capability declarations.
+When request-side context tokens are absent, a correlated response's exact API
+`prompt_tokens` field is accepted as `api_exact` input/context evidence. Missing
+API usage, reasoning-token detail, compaction, or harness tool-execution evidence
+remains unavailable; no tokenizer estimate was added.
+
+Real harness adapters, report rendering, charts, cross-run interpolation,
+Parquet, DuckDB, and qualitative analysis remain deferred.

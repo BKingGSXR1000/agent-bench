@@ -98,11 +98,14 @@ Metrics must remain completely LLM-independent.
 
 ## M5 — Fixed llama.cpp environment and LLM logging proxy
 
+Status: completed
+
 Implement:
 - fixed llama.cpp backend profile
 - exact executable/model identity
 - model SHA256
 - exact resolved llama-server command
+- deterministic repetition seed passed explicitly to llama-server
 - backend readiness checks
 - restart policy
 - warmup policy
@@ -111,6 +114,11 @@ Implement:
 - capture actual request payloads and responses
 - secret redaction
 - context/token observations where available
+- versioned CaptureCapabilities declarations
+- fresh RTX 3090 identity/process telemetry with unavailable-evidence
+  fail-closed behavior and no arbitrary idle-VRAM cutoff
+- immutable FailedRunEvidence for pre-task backend failures
+- deterministic empty-history-think validation support
 
 The proxy must not intentionally alter requests or responses.
 
