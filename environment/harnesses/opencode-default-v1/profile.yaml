@@ -1,17 +1,17 @@
 schema_version: 1.0.0
 profile_id: opencode-default-v1
-profile_version: 1.0.1
+profile_version: 1.0.2
 config_file: opencode.json
 config_sha256: ef4c1a16e4d50a1f747c14728740dc23bb578b58fec6bd32aa06e2af68a533a4
 proxy_base_url: http://127.0.0.1:18081/v1
 provider_id: agent-bench
 model_id: qwen3.8-27b
 executable:
-  path: /home/bking/.opencode/bin/opencode
+  path: /home/bking/AI/agent-bench/toolchains/opencode/1.18.25/bin/opencode
   size_bytes: 184682624
   sha256: d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb
   version: 1.18.25
-  runtime_identity: self-contained Bun ELF; @opencode-ai/sdk 1.18.19; @opencode-ai/plugin 1.18.19
+  runtime_identity: self-contained Bun ELF
 invocation:
   pure: true
   format: json

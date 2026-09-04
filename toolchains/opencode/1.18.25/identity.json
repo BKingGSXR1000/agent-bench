@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "product": "OpenCode",
+  "version": "1.18.25",
+  "benchmark_managed_binary_path": "/home/bking/AI/agent-bench/toolchains/opencode/1.18.25/bin/opencode",
+  "size_bytes": 184682624,
+  "sha256": "d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb",
+  "runtime_type": "self-contained Bun ELF",
+  "source_adjacent_packages_at_materialization": {
+    "@opencode-ai/sdk": "1.18.19",
+    "@opencode-ai/plugin": "1.18.19"
+  },
+  "provenance": {
+    "source_path_at_materialization": "/home/bking/.opencode/bin/opencode",
+    "source_sha256": "d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb",
+    "materialization_method": "byte-identical local copy of the validated OpenCode 1.18.25 executable"
+  },
+  "required_host_library_dependencies": [
+    "/lib64/ld-linux-x86-64.so.2",
+    "libc.so.6",
+    "libpthread.so.0",
+    "libdl.so.2",
+    "libm.so.6"
+  ]
+}

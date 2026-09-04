@@ -31,6 +31,14 @@ DEFAULT_OPENCODE_PROFILE_PATH = (
     / "opencode-default-v1"
     / "profile.yaml"
 )
+BENCHMARK_OPENCODE_EXECUTABLE = (
+    Path(__file__).resolve().parents[2]
+    / "toolchains"
+    / "opencode"
+    / "1.18.25"
+    / "bin"
+    / "opencode"
+)
 
 
 class OpenCodeError(RuntimeError):
@@ -55,7 +63,7 @@ class OpenCodeInvocationPolicy(PersistedModel):
 
 class OpenCodeProfile(PersistedModel):
     profile_id: Literal["opencode-default-v1"] = "opencode-default-v1"
-    profile_version: Literal["1.0.1"] = "1.0.1"
+    profile_version: Literal["1.0.2"] = "1.0.2"
     profile_path: Path
     config_file: Path
     config_sha256: Sha256
@@ -70,6 +78,8 @@ class OpenCodeProfile(PersistedModel):
     def validate_paths(self) -> OpenCodeProfile:
         if not self.profile_path.is_absolute() or not self.config_file.is_absolute():
             raise ValueError("OpenCode profile paths must be absolute")
+        if self.executable.path != BENCHMARK_OPENCODE_EXECUTABLE:
+            raise ValueError("OpenCode profile must use the benchmark-managed executable")
         return self
 
     @property
@@ -139,6 +149,14 @@ def inspect_opencode_executable(path: Path) -> OpenCodeExecutable:
         version=result.stdout.strip(),
         runtime_identity=_runtime_identity(executable),
     )
+
+
+def verify_opencode_toolchain(profile: OpenCodeProfile) -> OpenCodeExecutable:
+    """Fail before a task when the sole benchmark-managed binary drifts or vanishes."""
+    observed = inspect_opencode_executable(profile.executable.path)
+    if observed != profile.executable:
+        raise OpenCodeError("benchmark-managed OpenCode identity differs from the pinned profile")
+    return observed
 
 
 def materialize_opencode_profile(
@@ -242,7 +260,7 @@ class OpenCodeAdapter:
     """Run one fresh OpenCode session and capture its official JSON event stream."""
 
     adapter_id = "opencode"
-    adapter_version = "1.0.1"
+    adapter_version = "1.0.2"
     capture_capabilities = opencode_capture_capabilities()
 
     def __init__(
@@ -265,9 +283,7 @@ class OpenCodeAdapter:
         if context.proxy_endpoint is None:
             raise OpenCodeError("OpenCode requires an Agent Bench proxy endpoint")
         if self._verify_executable:
-            observed = inspect_opencode_executable(self.profile.executable.path)
-            if observed != self.profile.executable:
-                raise OpenCodeError("installed OpenCode identity differs from the pinned profile")
+            verify_opencode_toolchain(self.profile)
         config_path = materialize_opencode_profile(self.profile, context)
         environment = opencode_environment(context, config_path)
         argv = build_opencode_command(self.profile, context)

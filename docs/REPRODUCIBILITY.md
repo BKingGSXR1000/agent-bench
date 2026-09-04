@@ -171,12 +171,17 @@ The manifest records artifact-relative mappings and, in a restricted host-only r
 
 For OpenCode 1.18.25, the versioned `opencode-default-v1` profile is copied to
 `$XDG_CONFIG_HOME/opencode/opencode.json`; all five HOME/XDG locations and
-harness state are fresh. The executable is invoked with `--pure`, official JSON
-output, thinking visibility, non-interactive auto approval, the fixed model, and
-the isolated worktree. Prompt bytes are supplied through stdin because this
-version's positional-message path adds literal quote characters around arguments
-containing spaces. Native stdout/stderr, the session export, copied XDG state,
-and the complete allowlisted environment are preserved. See `OPENCODE.md`.
+harness state are fresh. The sole permitted runtime binary is the locally
+provisioned benchmark payload `toolchains/opencode/1.18.25/bin/opencode`, pinned
+by the tracked `toolchains/opencode/1.18.25/identity.json`; the user's personal
+OpenCode installation is never consulted at runtime. Its presence, executable
+bit, SHA256, size, version, and runtime identity are checked before a task.
+The executable is invoked with `--pure`, official JSON output, thinking
+visibility, non-interactive auto approval, the fixed model, and the isolated
+worktree. Prompt bytes are supplied through stdin because this version's
+positional-message path adds literal quote characters around arguments containing
+spaces. Native stdout/stderr, the session export, copied XDG state, and the
+complete allowlisted environment are preserved. See `OPENCODE.md`.
 
 ## 9. Environment-variable allowlisting
 

@@ -7,19 +7,25 @@ import socket
 import stat
 from pathlib import Path
 
+import pytest
+
 from agent_bench.events import RawEventWriter, load_normalized_events, load_raw_events
 from agent_bench.harness import HarnessRunContext, HarnessRunPaths
 from agent_bench.metrics import calculate_run_metrics
 from agent_bench.models import RunLimits
 from agent_bench.opencode import (
+    BENCHMARK_OPENCODE_EXECUTABLE,
     OpenCodeAdapter,
+    OpenCodeError,
     OpenCodeExecutable,
+    OpenCodeProfile,
     build_opencode_command,
     inspect_opencode_executable,
     load_opencode_profile,
     materialize_opencode_profile,
     opencode_capture_capabilities,
     opencode_environment,
+    verify_opencode_toolchain,
 )
 from agent_bench.opencode_events import is_test_command, normalize_opencode_events
 from agent_bench.opencode_run import _port_has_listener
@@ -126,6 +132,40 @@ def test_executable_identity_parsing_uses_isolated_environment(tmp_path: Path) -
     assert identity.version == "fixture-1.0"
     assert identity.sha256 == hashlib.sha256(executable.read_bytes()).hexdigest()
     assert identity.size_bytes == executable.stat().st_size
+
+
+def test_default_profile_uses_only_the_benchmark_managed_executable(
+    tmp_path: Path, run_fixture: RunFixture
+) -> None:
+    profile = load_opencode_profile()
+    context, writer = _context(tmp_path, run_fixture)
+    writer.seal()
+
+    assert profile.executable.path == BENCHMARK_OPENCODE_EXECUTABLE
+    assert profile.executable.path != Path("/home/bking/.opencode/bin/opencode")
+    assert verify_opencode_toolchain(profile) == profile.executable
+    assert build_opencode_command(profile, context)[0] == str(BENCHMARK_OPENCODE_EXECUTABLE)
+    assert "/home/bking/.opencode/bin" not in opencode_environment(
+        context, tmp_path / "opencode.json"
+    ).values()
+    altered = profile.model_dump(mode="python", exclude_computed_fields=True)
+    altered["executable"]["path"] = Path("/home/bking/.opencode/bin/opencode")
+    with pytest.raises(ValueError, match="benchmark-managed executable"):
+        OpenCodeProfile.model_validate(altered)
+
+
+def test_benchmark_managed_executable_missing_or_drifted_fails_preflight() -> None:
+    profile = load_opencode_profile()
+    missing = profile.model_copy(
+        update={"executable": profile.executable.model_copy(update={"path": Path("/tmp/missing-agent-bench-opencode")})}
+    )
+    with pytest.raises(OpenCodeError, match="missing or invalid"):
+        verify_opencode_toolchain(missing)
+    drifted = profile.model_copy(
+        update={"executable": profile.executable.model_copy(update={"sha256": "0" * 64})}
+    )
+    with pytest.raises(OpenCodeError, match="identity differs"):
+        verify_opencode_toolchain(drifted)
 
 
 def test_profile_materialization_command_environment_and_prompt_bytes(

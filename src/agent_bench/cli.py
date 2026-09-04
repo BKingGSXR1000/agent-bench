@@ -39,8 +39,8 @@ from agent_bench.metrics_storage import (
 from agent_bench.models import ExperimentDefinition, Identifier
 from agent_bench.opencode import (
     OpenCodeError,
-    inspect_opencode_executable,
     load_opencode_profile,
+    verify_opencode_toolchain,
 )
 from agent_bench.opencode_run import execute_controlled_opencode_run
 from agent_bench.pi import PiError, inspect_pi_toolchain, load_pi_profile
@@ -416,11 +416,10 @@ def opencode_inspect() -> None:
     """Inspect the pinned executable and controlled profile without running a task."""
     try:
         profile = load_opencode_profile()
-        observed = inspect_opencode_executable(profile.executable.path)
+        observed = verify_opencode_toolchain(profile)
     except OpenCodeError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    matches = observed == profile.executable
     typer.echo(
         f"profile_id={profile.profile_id}\n"
         f"profile_digest={profile.definition_digest}\n"
@@ -429,10 +428,8 @@ def opencode_inspect() -> None:
         f"version={observed.version}\n"
         f"executable_sha256={observed.sha256}\n"
         f"runtime_identity={observed.runtime_identity}\n"
-        f"pinned_identity_match={str(matches).lower()}"
+        "pinned_identity_match=true"
     )
-    if not matches:
-        raise typer.Exit(code=1)
 
 
 @opencode_app.command("run")

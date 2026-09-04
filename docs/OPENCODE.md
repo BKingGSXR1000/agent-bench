@@ -1,15 +1,22 @@
 # OpenCode M6 Integration
 
 Status: Milestone M6 implemented contract  
-Current adapter/profile/normalizer version: 1.0.1
+Current adapter/profile/normalizer version: 1.0.2
 
 ## Pinned harness identity
 
-The controlled harness is `/home/bking/.opencode/bin/opencode` version
-`1.18.25`, a self-contained Bun ELF executable of 184,682,624 bytes with
-SHA256 `d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb`.
-The adjacent installed SDK and plugin packages report version `1.18.19`.
-Identity is checked in a fresh temporary HOME/XDG environment before execution.
+The controlled harness is the benchmark-managed local payload
+`toolchains/opencode/1.18.25/bin/opencode`, version `1.18.25`, a self-contained
+Bun ELF executable of 184,682,624 bytes with SHA256
+`d91e0d33676d0839f7cde87924cd4127ea88c9d6784eea9f009a7d08bdc60eeb`.
+Its tracked [identity metadata](../toolchains/opencode/1.18.25/identity.json)
+records its source provenance and standard host-library dependencies. The large
+binary payload is intentionally ignored, like the Pi and Node toolchain payloads.
+The user's `/home/bking/.opencode/bin/opencode` installation was only the
+one-time materialization source and is not part of the benchmark environment.
+Every run checks the benchmark-owned file's existence, executable bit, size,
+SHA256, version, and runtime identity in a fresh temporary HOME/XDG environment
+before task execution. There is no PATH or personal-installation fallback.
 
 ## Controlled default profile
 
@@ -60,7 +67,7 @@ configuration paths.
 The authoritative argv is:
 
 ```text
-/home/bking/.opencode/bin/opencode --pure run --format json --thinking --auto --model agent-bench/qwen3.8-27b --dir <isolated-worktree>
+/home/bking/AI/agent-bench/toolchains/opencode/1.18.25/bin/opencode --pure run --format json --thinking --auto --model agent-bench/qwen3.8-27b --dir <isolated-worktree>
 ```
 
 The exact UTF-8 prompt bytes are written to stdin and followed by EOF. No
@@ -110,7 +117,27 @@ does not expose complete compaction events, so compaction remains unavailable.
 | compaction and post-Jinja serialized prompt | `unavailable` |
 | empty historical think detection | `proxy_exact` for request messages only |
 
-## Final M6 real integration observation
+## Benchmark-managed executable verification
+
+After the profile was moved to the benchmark-owned executable, one controlled
+M6 verification run completed as
+`opencode-opencode-default-v1-m6-readme-single-edit-r001-8a935b046dd08b1ac44b7cc4`.
+Its sealed artifact is
+`/tmp/agent-bench-m6-toolchain-audit/output/artifacts/opencode-opencode-default-v1-m6-readme-single-edit-r001-8a935b046dd08b1ac44b7cc4`
+and its metrics artifact is under the matching `output/analysis/.../metrics-v1`
+directory. The benchmark-owned executable was recorded as the invoked argv[0];
+the personal OpenCode path does not occur in the preserved evidence.
+
+The 117-byte source prompt, captured stdin stream, session export, and every
+proxy request task message had SHA256
+`03b18403ef4a275d88d1dbaaa9f92f0935a5c38631afa3bcf3c3fbe1526de67f`.
+The proxy captured five streamed Qwen requests, the intended sole README edit,
+and a successful termination. The sealed metrics record 32.808974701 seconds
+wall time, 31,716 input tokens, 564 output tokens, and a 7,998-token peak
+context. Both artifact checksum inventories verified; runtime/worktree cleanup
+left only their empty parent directories and no OpenCode or llama-server process.
+
+## Historical 1.0.1 real integration observation
 
 The final 1.0.1 adapter/profile/normalizer was exercised exactly once as
 `m6-opencode-real-v101-r001` on 2026-09-04. Its immutable run artifact is
