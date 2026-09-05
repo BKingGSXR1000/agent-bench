@@ -26,6 +26,7 @@ from agent_bench.reporting import (
     verify_report,
     _ingest,
     _comparative_validity,
+    concise_chart_series_labels,
 )
 from agent_bench.executor import ExperimentState, RunProgress
 from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
@@ -64,6 +65,30 @@ def test_normalized_curve_uses_task_relative_time_and_does_not_cross_unavailable
     assert curve[0] == {"x": 0.0, "context_utilization_percent": 10.0, "value_method": "measured"}
     assert curve[1]["value_method"] == "unavailable_gap"
     assert curve[-1]["context_utilization_percent"] == 30.0
+
+
+def test_concise_chart_labels_use_structured_metadata_and_known_reasoning_mapping() -> None:
+    rows = [
+        {"run_id": "opaque-xhigh-digest", "harness": "hermes", "harness_profile": "hermes-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1},
+        {"run_id": "opaque-medium-digest", "harness": "hermes", "harness_profile": "hermes-reasoning-medium-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1},
+    ]
+    assert concise_chart_series_labels(rows) == {
+        "opaque-medium-digest": "medium · entry-category · normal · R001",
+        "opaque-xhigh-digest": "xhigh · entry-category · normal · R001",
+    }
+
+
+def test_chart_labels_prefix_multiple_harnesses_and_resolve_collisions_without_run_digest() -> None:
+    rows = [
+        {"run_id": "opaque-a", "harness": "hermes", "harness_profile": "hermes-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1, "seed": 1001},
+        {"run_id": "opaque-b", "harness": "hermes", "harness_profile": "hermes-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1, "seed": 1002},
+        {"run_id": "opaque-c", "harness": "opencode", "harness_profile": "opencode-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1, "seed": 1001},
+    ]
+    labels = concise_chart_series_labels(rows)
+    assert labels["opaque-a"] == "Hermes · xhigh · entry-category · normal · R001 · seed 1001"
+    assert labels["opaque-b"].endswith("seed 1002")
+    assert labels["opaque-c"] == "OpenCode · default · entry-category · normal · R001"
+    assert all("opaque-" not in label for label in labels.values())
 
 
 def test_synthetic_multi_harness_aggregation_and_parquet_duckdb(tmp_path: Path) -> None:
@@ -162,6 +187,29 @@ def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() ->
     assert "opencode-task-a-vague-1" in output
     assert "135" in output
     assert "N/A" not in output
+
+
+def test_chart_html_uses_concise_legend_labels_and_offline_series_interaction() -> None:
+    run_id = "hermes-hermes-default-v1-entry-category-normal-r001-347450c68e34f414e5c905b6"
+    run = _run(harness="hermes", task="entry-category", variant="normal", repetition=1, value=1.0)
+    run.update({"run_id": run_id, "harness_profile": "hermes-default-v1", "execution_index": 1, "seed": 1001})
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 1, "completed": 1, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "runs": [run], "summaries": [],
+        "curves": [{"curve_kind": "absolute_elapsed_task_time", "run_id": run_id, "x": 1.0, "context_utilization_percent": 10.0}],
+        "markers": [], "failures": [], "details": {}, "data_files": [],
+        "chart_series_labels": concise_chart_series_labels([run]),
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "xhigh · entry-category · normal · R001" in output
+    assert f">{run_id}</button>" not in output
+    assert "data-series-id" in output and "data-run-id" in output and "aria-controls" in output
+    assert 'title="${esc(id)} — full run identity"' in output and "series-hit" in output
+    assert "wireChartInteractions" in output and "pointerover" in output and "Escape" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
 
 
 def test_failed_run_evidence_is_reported_as_verified_infrastructure_record(tmp_path: Path) -> None:
