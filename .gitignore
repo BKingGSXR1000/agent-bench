@@ -25,5 +25,11 @@ runs/
 artifacts/
 .bench/
 
+# Local generated reporting smoke/test outputs; report sources and fixtures stay tracked.
+test-full-report-old-data/
+test-js-fix/
+test-report-old-data/
+test-unified-report-old-data/
+
 *.log
 .DS_Store
