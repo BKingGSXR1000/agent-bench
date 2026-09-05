@@ -557,5 +557,5 @@ def test_metrics_cli_calculate_and_show(metrics_run: object, tmp_path: Path) -> 
 
     show = cli.invoke(app, ["metrics", "show", str(metrics_root)])
     assert show.exit_code == 0, show.output
-    assert '"metric_spec_version": "1.0.2"' in show.output
+    assert '"metric_spec_version": "1.0.3"' in show.output
     assert '"termination_class": "success"' in show.output

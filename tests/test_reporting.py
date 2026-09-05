@@ -289,7 +289,9 @@ def test_variant_comparison_is_metric_selectable_and_uses_only_matched_determini
     assert "function variantMetricKeys(rows)" in output
     assert "Object.entries(row.metrics||{})" in output
     assert "reasoning_time_seconds" not in output
-    assert "reasoning_tokens" not in output
+    # Reconstructed reasoning-token fields are allowed only when raw metric
+    # data contains a finite value; the static label alone does not select it.
+    assert "reasoning.reasoning_tokens_total.value" in output
     # Category identity includes harness, profile, and effective setting, while
     # matching requires subject/task/exact prompt hash/repetition/seed.
     assert "function variantDescriptors(rows)" in output

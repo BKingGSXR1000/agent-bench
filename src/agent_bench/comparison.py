@@ -50,6 +50,15 @@ METRICS = (
     "behavior.output_tokens_before_first_model_tool_call.value",
     "behavior.requests_before_first_model_edit_call.value",
     "behavior.output_tokens_before_first_model_edit_call.value",
+    "reasoning.reasoning_tokens_total.value",
+    "reasoning.reasoning_tokens_before_first_tool.value",
+    "reasoning.reasoning_tokens_before_first_edit.value",
+    "reasoning.max_continuous_reasoning_tokens.value",
+    "reasoning.reasoning_block_count.value",
+    "reasoning.reasoning_chars_total.value",
+    "reasoning.max_continuous_reasoning_chars.value",
+    "reasoning.reasoning_time_total_seconds.value",
+    "derived.reasoning_to_output_ratio.value",
 )
 
 
@@ -453,7 +462,9 @@ def _pair(
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     for name in METRICS:
-        left, right = reference["metrics"][name], candidate["metrics"][name]
+        # Newly introduced metric families are absent from older immutable
+        # comparison payloads.  Missing remains explicitly unavailable.
+        left, right = reference["metrics"].get(name), candidate["metrics"].get(name)
         if left is None or right is None:
             metrics[name] = {"reference_value": left, "candidate_value": right, "absolute_delta": None, "relative_delta_percent": None, "direction": "not_available"}
             continue

@@ -25,6 +25,7 @@ from agent_bench.metric_models import (
     MetricProvenance,
     MetricsInputIdentity,
     RequestTokenUsage,
+    ReasoningMetrics,
     RunMetrics,
     ScalarMetric,
     TerminationResult,
@@ -33,6 +34,8 @@ from agent_bench.metric_models import (
     ToolCategoryCounts,
 )
 from agent_bench.models import canonical_sha256
+from agent_bench.reasoning_blocks import extract_reasoning_blocks
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenizerError
 from agent_bench.preservation import (
     GIT_UNTRACKED_NUMSTAT_PATH,
     GIT_TRACKED_NUMSTAT_PATH,
@@ -43,7 +46,7 @@ from agent_bench.preservation import (
 from agent_bench.runner import NORMALIZED_EVENTS_PATH, RAW_EVENTS_PATH, RUN_MANIFEST_PATH, RunManifest
 
 METRICS_CONFIGURATION = {
-    "version": "1.0.2",
+    "version": "1.0.3",
     "duration_aggregation": "sum_completed_correlated_intervals",
     "duplicate_arguments": "canonical-json-exact-v1",
     "path_normalization": "project-relative-posix-lexical-v1",
@@ -107,7 +110,9 @@ class _GitSummary:
     line_reason: str | None
 
 
-def calculate_run_metrics(artifact_path: Path) -> RunMetrics:
+def calculate_run_metrics(
+    artifact_path: Path, *, reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+) -> RunMetrics:
     """Verify and deterministically calculate metrics for one sealed run."""
     root = artifact_path.expanduser().resolve()
     try:
@@ -174,6 +179,20 @@ def calculate_run_metrics(artifact_path: Path) -> RunMetrics:
         diagnostics,
         complete_tool_capture=complete_tool_capture,
     )
+    reasoning = _calculate_reasoning_metrics(
+        events, tokens.reasoning_tokens_total, tokens.reasoning_tokens_before_first_edit,
+        reasoning_tokenizer=reasoning_tokenizer,
+    )
+    # Explicit captured reasoning text takes precedence over a conflicting
+    # zero-valued usage counter.  A zero counter is not evidence of zero
+    # reasoning when a harness exposed non-empty reasoning blocks.
+    if reasoning.reasoning_block_count.availability == "available" and int(reasoning.reasoning_block_count.value) > 0:
+        tokens = tokens.model_copy(update={
+            "reasoning_tokens_total": reasoning.reasoning_tokens_total,
+            "reasoning_tokens_before_first_edit": reasoning.reasoning_tokens_before_first_edit,
+            "reasoning_tokens_before_first_tool": reasoning.reasoning_tokens_before_first_tool,
+            "max_continuous_reasoning_tokens": reasoning.max_continuous_reasoning_tokens,
+        })
     derived = _calculate_derived(timing, tokens, behavior)
     git_result, git_summary = _calculate_git(root, diagnostics)
     termination = _classify_termination(
@@ -197,6 +216,7 @@ def calculate_run_metrics(artifact_path: Path) -> RunMetrics:
         input_identity=input_identity,
         timing=timing,
         tokens=tokens,
+        reasoning=reasoning,
         context=context,
         behavior=behavior,
         derived=derived,
@@ -1230,6 +1250,100 @@ def _tokens_before_edit(
     return (
         _available(total, "tokens", "deterministically_calculated", events=tuple(evidence)),
         _available(reasoning, "tokens", "deterministically_calculated", events=tuple(evidence)),
+    )
+
+
+def _calculate_reasoning_metrics(
+    events: tuple[NormalizedEvent, ...],
+    usage_total: ScalarMetric,
+    usage_before_edit: ScalarMetric,
+    *,
+    reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+) -> ReasoningMetrics:
+    """Calculate captured-thinking metrics without character/token conflation.
+
+    The current persistent evidence supplies exact text and, for OpenCode,
+    native block timing.  It does not yet carry a sealed tokenizer invocation
+    for individual blocks.  Therefore block token quantities are unavailable
+    unless an exact native non-zero aggregate is already present; no character
+    count is ever promoted to a token count.
+    """
+    blocks = extract_reasoning_blocks(events)
+    evidence = tuple(block.event_id for block in blocks)
+    if not blocks:
+        unavailable_chars = _unavailable("characters", "source_not_exposed")
+        unavailable_tokens = _unavailable("tokens", "source_not_exposed")
+        unavailable_seconds = _unavailable("seconds", "source_not_exposed")
+        return ReasoningMetrics(
+            reasoning_block_count=_unavailable("blocks", "source_not_exposed"),
+            reasoning_chars_total=unavailable_chars,
+            reasoning_chars_before_first_tool=_unavailable("characters", "event_not_observed"),
+            reasoning_chars_before_first_edit=_unavailable("characters", "event_not_observed"),
+            max_continuous_reasoning_chars=unavailable_chars,
+            reasoning_tokens_total=usage_total,
+            reasoning_tokens_before_first_tool=unavailable_tokens,
+            reasoning_tokens_before_first_edit=usage_before_edit,
+            max_continuous_reasoning_tokens=unavailable_tokens,
+            reasoning_time_total_seconds=unavailable_seconds,
+            max_continuous_reasoning_time_seconds=unavailable_seconds,
+        )
+
+    block_count = _available(len(blocks), "blocks", "normalized_event_exact", events=evidence)
+    chars_total = _available(sum(block.characters for block in blocks), "characters", "deterministically_calculated", events=evidence)
+    max_chars = _available(max(block.characters for block in blocks), "characters", "deterministically_calculated", events=evidence)
+
+    tool_boundary = next((event.sequence for event in events if event.event_kind == "tool_call_start"), None)
+    edit_boundary = next((event.sequence for event in events if event.event_kind == "tool_call_start" and event.payload.get("category") in {"edit", "write"}), None)
+
+    def chars_before(boundary: int | None) -> ScalarMetric:
+        if boundary is None:
+            return _unavailable("characters", "event_not_observed", events=evidence)
+        return _available(sum(block.characters for block in blocks if block.sequence < boundary), "characters", "deterministically_calculated", events=evidence)
+
+    if reasoning_tokenizer is not None:
+        try:
+            counts = [reasoning_tokenizer.count(block.text) for block in blocks]
+        except ReasoningTokenizerError:
+            counts = None
+        if counts is not None:
+            provenance = {"events": evidence, "artifacts": ("raw/events.jsonl",), "source_methods": (reasoning_tokenizer.tokenizer_identity, reasoning_tokenizer.model_sha256, reasoning_tokenizer.tokenizer_digest)}
+            total_tokens = _available(sum(counts), "tokens", "tokenizer_reconstructed", **provenance)
+            max_tokens = _available(max(counts), "tokens", "tokenizer_reconstructed", **provenance)
+            def tokens_before(boundary: int | None) -> ScalarMetric:
+                if boundary is None: return _unavailable("tokens", "event_not_observed", events=evidence)
+                return _available(sum(count for block, count in zip(blocks, counts, strict=True) if block.sequence < boundary), "tokens", "tokenizer_reconstructed", **provenance)
+            before_tool_tokens, before_edit_tokens = tokens_before(tool_boundary), tokens_before(edit_boundary)
+        else:
+            total_tokens = _unavailable("tokens", "source_not_exposed", events=evidence)
+            max_tokens = before_tool_tokens = before_edit_tokens = _unavailable("tokens", "source_not_exposed", events=evidence)
+    else:
+        # Usage counters that say zero while captured blocks are non-empty
+        # conflict with primary text evidence.  Do not publish that zero.
+        total_tokens = _unavailable("tokens", "ambiguous_evidence", events=evidence) if usage_total.availability == "available" and usage_total.value == 0 else usage_total
+        max_tokens = before_tool_tokens = _unavailable("tokens", "source_not_exposed", events=evidence)
+        before_edit_tokens = _unavailable("tokens", "ambiguous_evidence", events=evidence) if usage_before_edit.availability == "available" and usage_before_edit.value == 0 else usage_before_edit
+
+    durations = [block.duration_seconds for block in blocks]
+    if all(duration is not None for duration in durations):
+        exact = [float(duration) for duration in durations if duration is not None]
+        time_total = _available(sum(exact), "seconds", "deterministically_calculated", events=evidence, source_methods=("exact_native",))
+        max_time = _available(max(exact), "seconds", "deterministically_calculated", events=evidence, source_methods=("exact_native",))
+    else:
+        time_total = _unavailable("seconds", "source_not_exposed", events=evidence)
+        max_time = _unavailable("seconds", "source_not_exposed", events=evidence)
+
+    return ReasoningMetrics(
+        reasoning_block_count=block_count,
+        reasoning_chars_total=chars_total,
+        reasoning_chars_before_first_tool=chars_before(tool_boundary),
+        reasoning_chars_before_first_edit=chars_before(edit_boundary),
+        max_continuous_reasoning_chars=max_chars,
+        reasoning_tokens_total=total_tokens,
+        reasoning_tokens_before_first_tool=before_tool_tokens,
+        reasoning_tokens_before_first_edit=before_edit_tokens,
+        max_continuous_reasoning_tokens=max_tokens,
+        reasoning_time_total_seconds=time_total,
+        max_continuous_reasoning_time_seconds=max_time,
     )
 
 

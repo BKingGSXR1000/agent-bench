@@ -35,6 +35,7 @@ from agent_bench.failure import (
 from agent_bench.git import GitOperationError, resolve_baseline
 from agent_bench.matrix import expand_experiment, generate_run_definitions
 from agent_bench.metrics import MetricsCalculationError, calculate_run_metrics
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenizerError
 from agent_bench.metrics_storage import (
     MetricsStorageError,
     store_metrics_artifact,
@@ -372,16 +373,27 @@ def artifact_restore(path: Path, destination: Path) -> None:
 
 
 @metrics_app.command("calculate")
-def metrics_calculate(source_artifact: Path, output_root: Path) -> None:
+def metrics_calculate(
+    source_artifact: Path,
+    output_root: Path,
+    reasoning_tokenizer_executable: Path | None = typer.Option(None, "--reasoning-tokenizer-executable", help="Pinned llama-tokenize executable; enables exact reasoning block tokenization."),
+    reasoning_tokenizer_model: Path | None = typer.Option(None, "--reasoning-tokenizer-model", help="Pinned GGUF model for exact reasoning tokenization."),
+    reasoning_tokenizer_model_sha256: str | None = typer.Option(None, "--reasoning-tokenizer-model-sha256", help="Sealed SHA-256 identity of the GGUF model."),
+    reasoning_tokenizer_commit: str | None = typer.Option(None, "--reasoning-tokenizer-commit", help="Pinned llama.cpp commit for llama-tokenize."),
+) -> None:
     """Calculate and seal a separate immutable metrics artifact."""
     try:
-        metrics = calculate_run_metrics(source_artifact)
+        tokenizer_options = (reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit)
+        if any(value is not None for value in tokenizer_options) and not all(value is not None for value in tokenizer_options):
+            raise MetricsCalculationError("all --reasoning-tokenizer-* options are required together")
+        tokenizer = LlamaTokenizeCounter(reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit) if all(value is not None for value in tokenizer_options) else None
+        metrics = calculate_run_metrics(source_artifact, reasoning_tokenizer=tokenizer)
         stored = store_metrics_artifact(
             source_artifact=source_artifact,
             output_root=output_root,
             metrics=metrics,
         )
-    except (MetricsCalculationError, MetricsStorageError, PreservationError) as exc:
+    except (MetricsCalculationError, MetricsStorageError, PreservationError, ReasoningTokenizerError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
