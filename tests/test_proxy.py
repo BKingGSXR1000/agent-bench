@@ -223,6 +223,22 @@ def test_context_usage_reasoning_and_finish_extraction_is_exact_only() -> None:
     assert observed.finish_reason == "stop"
 
 
+def test_response_visible_answer_presence_is_explicit_for_final_response_metrics() -> None:
+    reasoning_only = extract_response_observations(
+        b'{"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":"r","tool_calls":[]}}]}',
+        "application/json",
+    )
+    visible = extract_response_observations(
+        b'{"choices":[{"finish_reason":"stop","message":{"content":"done","reasoning_content":"r"}}]}',
+        "application/json",
+    )
+    unavailable = extract_response_observations(b'{"usage":{"prompt_tokens":1}}', "application/json")
+    assert reasoning_only.visible_answer_present is False
+    assert reasoning_only.finish_reason == "length"
+    assert visible.visible_answer_present is True
+    assert unavailable.visible_answer_present is None
+
+
 def test_owned_proxy_can_reuse_one_fixed_port_sequentially(tmp_path: Path) -> None:
     """A clean owned proxy shutdown must not require an arbitrary delay."""
     upstream, thread = _start_upstream()

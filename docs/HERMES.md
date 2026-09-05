@@ -45,6 +45,16 @@ versioned `context-analysis-v2` layer records first-task and task-relative
 context evidence without subtracting any harness prompt/tool overhead. See
 [CONTEXT_ANALYSIS.md](CONTEXT_ANALYSIS.md).
 
+## Reasoning screen preparation
+
+`hermes-default-v1` remains the completed default / effective-xhigh control.
+The prepared, Hermes-only `hermes-reasoning-{off,low,medium}-v1` profiles change only
+the OpenAI-compatible `reasoning_effort` request field through the copied
+custom-provider `extra_body`; they do not change tools, endpoint, model,
+template, or server configuration. The exact Qwen/llama.cpp mapping, request
+capture requirements, control policy, and future budget-sweep boundary are in
+[HERMES_REASONING_SCREEN.md](HERMES_REASONING_SCREEN.md).
+
 Before any controlled backend or harness process is constructed, Agent Bench
 writes and fsyncs a generic `supervisor/<run-id>/01-initialized.json` record
 containing the PID, UTC timestamp, argv, cwd, Python identity, output root, and

@@ -10,7 +10,7 @@ import pytest
 
 from agent_bench.events import RawEventWriter, load_normalized_events, load_raw_events
 from agent_bench.harness import HarnessRunContext, HarnessRunPaths
-from agent_bench.hermes import HermesAdapter, HermesError, HermesRuntime, build_hermes_command, hermes_capture_capabilities, hermes_environment, inspect_hermes_toolchain, load_hermes_profile, materialize_hermes_profile
+from agent_bench.hermes import HermesAdapter, HermesError, HermesRuntime, build_hermes_command, hermes_capture_capabilities, hermes_environment, inspect_hermes_toolchain, load_hermes_profile, load_hermes_profile_for_id, materialize_hermes_profile
 from agent_bench.hermes_events import is_test_command, normalize_hermes_events
 from agent_bench.metrics import calculate_run_metrics
 from agent_bench.models import RunLimits
@@ -90,6 +90,37 @@ def test_profile_environment_command_and_exact_prompt(tmp_path: Path, run_fixtur
     assert environment['TERMINAL_CWD'] == str(context.paths.workspace)
     assert environment['PYTHONNOUSERSITE'] == '1'
     assert '--ignore-rules' not in command and '--safe-mode' not in command
+
+
+def test_reasoning_screen_profiles_change_only_the_pinned_request_field(
+    tmp_path: Path, run_fixture: RunFixture
+) -> None:
+    expected = {
+        "hermes-reasoning-off-v1": ("off", {"reasoning_effort": "none"}),
+        "hermes-reasoning-low-v1": ("low", {"reasoning_effort": "low"}),
+        "hermes-reasoning-medium-v1": ("medium", {"reasoning_effort": "medium"}),
+    }
+    context, writer = _context(tmp_path / "default", run_fixture)
+    default = load_hermes_profile()
+    default_command = build_hermes_command(default, context, tmp_path / "default-usage.json")
+    for profile_id, (setting, request_fields) in expected.items():
+        profile = load_hermes_profile_for_id(profile_id)
+        profile_context, profile_writer = _context(tmp_path / profile_id, run_fixture)
+        copied_home = materialize_hermes_profile(profile, profile_context)
+        assert profile.reasoning.setting == setting
+        assert profile.reasoning.request_fields == request_fields
+        assert profile.toolchain == default.toolchain
+        assert build_hermes_command(profile, context, tmp_path / f"{profile_id}-usage.json")[1:5] == default_command[1:5]
+        assert "reasoning_effort" in (copied_home / "config.yaml").read_text(encoding="utf-8")
+        profile_writer.seal()
+    writer.seal()
+
+
+def test_unknown_hermes_profile_has_no_fallback() -> None:
+    with pytest.raises(HermesError, match="cannot load Hermes profile"):
+        load_hermes_profile_for_id("hermes-not-installed-v1")
+    with pytest.raises(HermesError, match="cannot load Hermes profile"):
+        load_hermes_profile_for_id("hermes-reasoning-high-v1")
 
 
 def test_profile_isolation_does_not_share_hermes_state(tmp_path: Path, run_fixture: RunFixture) -> None:

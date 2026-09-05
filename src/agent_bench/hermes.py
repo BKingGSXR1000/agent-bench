@@ -21,7 +21,7 @@ from pydantic import Field, model_validator
 from agent_bench.capture import CaptureCapabilities
 from agent_bench.harness import HarnessExecutionResult, HarnessRunContext
 from agent_bench.hermes_events import normalize_hermes_events
-from agent_bench.models import Identifier, PersistedModel, Sha256, canonical_sha256
+from agent_bench.models import Identifier, JsonMapping, PersistedModel, Sha256, canonical_sha256
 
 DEFAULT_HERMES_PROFILE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -30,6 +30,7 @@ DEFAULT_HERMES_PROFILE_PATH = (
     / "hermes-default-v1"
     / "profile.yaml"
 )
+HERMES_PROFILES_ROOT = DEFAULT_HERMES_PROFILE_PATH.parent.parent
 
 
 class HermesError(RuntimeError):
@@ -68,9 +69,34 @@ class HermesRuntime(PersistedModel):
         return self
 
 
+class HermesReasoningPolicy(PersistedModel):
+    """The one permitted variable in the Hermes reasoning screen profiles."""
+
+    setting: Literal["default", "off", "low", "medium", "high"] = "default"
+    request_fields: JsonMapping = Field(default_factory=dict)
+    template_effect: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_request_fields(self) -> HermesReasoningPolicy:
+        expected: dict[str, JsonMapping] = {
+            "default": {},
+            "off": {"reasoning_effort": "none"},
+            "low": {"reasoning_effort": "low"},
+            "medium": {"reasoning_effort": "medium"},
+            # llama.cpp passes this through; the pinned template normalizes it.
+            "high": {"reasoning_effort": "high"},
+        }
+        if self.request_fields != expected[self.setting]:
+            raise ValueError(
+                "Hermes reasoning request_fields must be the exact pinned "
+                "llama.cpp reasoning_effort mapping"
+            )
+        return self
+
+
 class HermesProfile(PersistedModel):
-    profile_id: Literal["hermes-default-v1"] = "hermes-default-v1"
-    profile_version: Literal["1.0.0"] = "1.0.0"
+    profile_id: Identifier
+    profile_version: str = Field(min_length=1)
     profile_path: Path
     toolchain: HermesRuntime
     config_file: Path
@@ -80,6 +106,11 @@ class HermesProfile(PersistedModel):
     model_id: Identifier
     invocation: dict[str, object]
     deviations: tuple[str, ...]
+    reasoning: HermesReasoningPolicy = Field(
+        default_factory=lambda: HermesReasoningPolicy(
+            template_effect="template default: enabled thinking at xhigh"
+        )
+    )
 
     @model_validator(mode="after")
     def require_absolute_paths(self) -> HermesProfile:
@@ -109,7 +140,44 @@ def load_hermes_profile(path: Path = DEFAULT_HERMES_PROFILE_PATH) -> HermesProfi
     except ValueError as exc:
         raise HermesError(f"invalid Hermes profile: {exc}") from exc
     _verify_file(profile.config_file, profile.config_sha256)
+    _verify_reasoning_config(profile)
     return profile
+
+
+def load_hermes_profile_for_id(profile_id: str) -> HermesProfile:
+    """Load one checked-in Hermes profile without PATH or user-config fallback."""
+    if not profile_id or "/" in profile_id or "\\" in profile_id or profile_id in {".", ".."}:
+        raise HermesError(f"invalid Hermes profile ID: {profile_id!r}")
+    path = (HERMES_PROFILES_ROOT / profile_id / "profile.yaml").resolve()
+    try:
+        path.relative_to(HERMES_PROFILES_ROOT.resolve())
+    except ValueError as exc:
+        raise HermesError("Hermes profile path escapes the controlled profile root") from exc
+    profile = load_hermes_profile(path)
+    if profile.profile_id != profile_id:
+        raise HermesError(
+            f"Hermes profile file identity mismatch: expected {profile_id!r}, "
+            f"found {profile.profile_id!r}"
+        )
+    return profile
+
+
+def _verify_reasoning_config(profile: HermesProfile) -> None:
+    """Require the profile identity and copied config to agree on wire fields."""
+    try:
+        config = yaml.safe_load(profile.config_file.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise HermesError(f"cannot inspect Hermes profile configuration: {exc}") from exc
+    providers = config.get("providers") if isinstance(config, dict) else None
+    provider = providers.get(profile.provider_id) if isinstance(providers, dict) else None
+    actual = provider.get("extra_body", {}) if isinstance(provider, dict) else {}
+    if actual is None:
+        actual = {}
+    if not isinstance(actual, dict) or actual != profile.reasoning.request_fields:
+        raise HermesError(
+            "Hermes reasoning profile and providers.<id>.extra_body disagree "
+            "on exact llama.cpp request fields"
+        )
 
 
 def _load_toolchain(identity_path: Path) -> HermesRuntime:
@@ -281,8 +349,9 @@ class HermesAdapter:
         (evidence_root / "prompt-transport.bin").write_bytes(prompt_bytes)
         usage_file = evidence_root / "usage.json"
         argv = build_hermes_command(self.profile, context, usage_file)
-        _write_json(evidence_root / "invocation.json", {"schema_version": "1.0.0", "argv": list(argv), "prompt_sha256": prompt_sha256, "prompt_byte_length": len(prompt_bytes), "prompt_delivery": "argv_element_exact_utf8", "working_directory": str(context.paths.workspace), "environment": environment, "profile_digest": self.profile.definition_digest, "run_seed": context.run_seed})
-        context.events.emit(source="harness", event_type="hermes_start", payload={"profile_id": self.profile.profile_id, "model": self.profile.model_id, "proxy_endpoint": context.proxy_endpoint, "prompt_sha256": prompt_sha256, "prompt_delivery": "argv_element_exact_utf8", "fresh_session": True, "continued_session": False, "environment": environment, "argv": list(argv)})
+        reasoning = self.profile.reasoning.model_dump(mode="json")
+        _write_json(evidence_root / "invocation.json", {"schema_version": "1.0.0", "argv": list(argv), "prompt_sha256": prompt_sha256, "prompt_byte_length": len(prompt_bytes), "prompt_delivery": "argv_element_exact_utf8", "working_directory": str(context.paths.workspace), "environment": environment, "profile_digest": self.profile.definition_digest, "profile_reasoning": reasoning, "run_seed": context.run_seed})
+        context.events.emit(source="harness", event_type="hermes_start", payload={"profile_id": self.profile.profile_id, "model": self.profile.model_id, "proxy_endpoint": context.proxy_endpoint, "prompt_sha256": prompt_sha256, "prompt_delivery": "argv_element_exact_utf8", "fresh_session": True, "continued_session": False, "environment": environment, "argv": list(argv), "profile_reasoning": reasoning})
         stdout_path, stderr_path = evidence_root / "stdout.log", evidence_root / "stderr.log"
         process = self._popen(list(argv), cwd=context.paths.workspace, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, start_new_session=True)
         if process.stdout is None or process.stderr is None:

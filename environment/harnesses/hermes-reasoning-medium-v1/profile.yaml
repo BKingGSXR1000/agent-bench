@@ -1,0 +1,21 @@
+schema_version: 1.0.0
+profile_id: hermes-reasoning-medium-v1
+profile_version: 1.0.0
+toolchain_identity_file: ../../../toolchains/hermes/0.21.0/identity.json
+config_file: config.yaml
+config_sha256: 077d646fdeb8343377806ee7ae83db32909dbdbe7859377075c4f4f35c91e604
+proxy_base_url: http://127.0.0.1:18081/v1
+provider_id: agent-bench
+model_id: qwen3.8-27b
+invocation:
+  output_mode: final_text_with_usage_json
+  non_interactive: true
+  prompt_delivery: argv_element_exact_utf8
+  approval_mode: upstream_oneshot_auto_bypass
+  toolsets: upstream_default
+  project_local_discovery: enabled
+deviations: [local-endpoint, oneshot, isolated-state, reasoning-effort-medium]
+reasoning:
+  setting: medium
+  request_fields: {reasoning_effort: medium}
+  template_effect: "pinned Qwen template enables thinking; medium has no additional template instruction"

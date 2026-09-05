@@ -1,7 +1,7 @@
 # Agent Bench Deterministic Metrics
 
 Status: Milestone M4 implemented metric specification
-Specification version: 1.0.1
+Specification version: 1.0.2
 
 The concrete persisted schema, provenance, storage, and current capture boundary
 are documented in `METRICS_ENGINE.md`.
@@ -160,6 +160,13 @@ Secondary attributes may state that a test used a shell or an edit also created 
 | `repeated_identical_shell_commands` | Number of shell/test calls after the first with byte-identical executed argv/command representation and equivalent working directory/environment subset | `ToolCallEvent` | calls | Textually equal commands in different working directories are not identical. Unavailable when resolved command/cwd is missing. |
 | `repeated_reads_of_unchanged_files` | For each successful read after the first successful read of the same normalized worktree path, count it when content identity is identical and no observed successful mutation to that path occurred between reads | Read/edit/write events plus file content hashes or snapshot identities | reads | Reads of different ranges still count when they access the same unchanged file; the argument-level duplicate metric handles identical ranges. Requires complete mutation coverage and content identity. Otherwise unavailable, never guessed from call order alone. |
 | `reasoning_only_turns` | Count of observable harness turns containing reasoning output but no LLM-issued tool call/action and no visible final answer/action | Correlated reasoning, response, and tool events | turns | Unavailable unless turn boundaries and reasoning/action separation are exposed completely. |
+| `reasoning_only_responses` | Count of proxy-observed final model responses with nonempty `reasoning_content`, no visible answer content, and no model tool call | Correlated proxy `LLMResponseEvent` final response payloads | responses | Available only when every relevant final response explicitly exposes visible-answer presence and tool calls. Missing legacy fields produce `source_not_exposed`; no text is inferred from token counts. This is a response observation, not a harness turn metric. |
+| `length_finished_responses` | Count of final responses whose explicit finish reason is `length`, `max_tokens`, or `max_output_tokens` | Proxy `LLMResponseEvent` final response payloads | responses | Available only when a final response with a string finish reason is captured for every correlated inference response. Missing or non-string reasons are unavailable, never treated as `stop`. |
+| `length_finished_without_tool_call` | Subset of `length_finished_responses` that has no model tool call in the final response | Same as above | responses | Same availability rule. It says nothing about whether a harness subsequently executed a tool. |
+| `requests_before_first_model_tool_call` | Number of inference requests strictly before the first proxy-observed model tool call | Ordered correlated proxy exchanges | requests | Unavailable when no model tool call is observed or request ordering/tool-call exposure is incomplete. It is not `time_to_first_harness_tool_execution`. |
+| `output_tokens_before_first_model_tool_call` | Sum of exact API output tokens for the requests strictly before the first model tool call | Ordered proxy exchanges plus API usage | tokens | Unavailable if the first model tool call is absent or any included response lacks exact output usage. |
+| `requests_before_first_model_edit_call` | Number of inference requests strictly before the first model tool call whose deterministic name maps to edit/write (`patch`, `apply_patch`, `edit`, `edit_file`, `write`, or `write_file`) | Ordered proxy exchanges and model tool-call names | requests | Unavailable when no recognized model edit call is observed or a tool name cannot be parsed. A model edit call is not evidence that the harness executed or succeeded at the edit. |
+| `output_tokens_before_first_model_edit_call` | Sum of exact API output tokens for the requests strictly before the first recognized model edit call | Same as above plus API usage | tokens | Same availability rule as the preceding metric; no usage estimation is allowed. |
 
 ## 7. Derived efficiency metrics
 

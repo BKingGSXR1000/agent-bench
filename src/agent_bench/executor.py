@@ -25,6 +25,7 @@ from agent_bench.models import ExperimentDefinition, RunDefinition, canonical_sh
 from agent_bench.opencode_run import execute_controlled_opencode_run
 from agent_bench.pi_run import execute_controlled_pi_run
 from agent_bench.hermes_run import execute_controlled_hermes_run
+from agent_bench.hermes import load_hermes_profile_for_id
 from agent_bench.preservation import verify_artifact
 from agent_bench.result_store import ResultStoreError, publish_result_ref, verify_published_result
 from agent_bench.subject import FrozenSubject, materialize_baseline, verify_materialized_baseline
@@ -298,7 +299,10 @@ class _ControlledDispatch:
             elif run.harness_id == "pi":
                 result = execute_controlled_pi_run(**arguments)
             elif run.harness_id == "hermes":
-                result = execute_controlled_hermes_run(**arguments)
+                result = execute_controlled_hermes_run(
+                    **arguments,
+                    hermes_profile=load_hermes_profile_for_id(run.profile_id),
+                )
             else:  # pragma: no cover - pydantic restricts harness IDs
                 raise ExecutorError(f"unsupported harness {run.harness_id}")
             if result.failed_run is not None:

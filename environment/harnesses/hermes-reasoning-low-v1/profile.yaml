@@ -1,0 +1,21 @@
+schema_version: 1.0.0
+profile_id: hermes-reasoning-low-v1
+profile_version: 1.0.0
+toolchain_identity_file: ../../../toolchains/hermes/0.21.0/identity.json
+config_file: config.yaml
+config_sha256: 0cbb8aad5c60a5ac74ef76cdc581fc5c5cd1d672f622f939a9fbc3280134c81f
+proxy_base_url: http://127.0.0.1:18081/v1
+provider_id: agent-bench
+model_id: qwen3.8-27b
+invocation:
+  output_mode: final_text_with_usage_json
+  non_interactive: true
+  prompt_delivery: argv_element_exact_utf8
+  approval_mode: upstream_oneshot_auto_bypass
+  toolsets: upstream_default
+  project_local_discovery: enabled
+deviations: [local-endpoint, oneshot, isolated-state, reasoning-effort-low]
+reasoning:
+  setting: low
+  request_fields: {reasoning_effort: low}
+  template_effect: "pinned Qwen template enables thinking and injects its low-effort brief-thinking instruction"

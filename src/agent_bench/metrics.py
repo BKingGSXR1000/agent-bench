@@ -43,13 +43,14 @@ from agent_bench.preservation import (
 from agent_bench.runner import NORMALIZED_EVENTS_PATH, RAW_EVENTS_PATH, RUN_MANIFEST_PATH, RunManifest
 
 METRICS_CONFIGURATION = {
-    "version": "1.0.1",
+    "version": "1.0.2",
     "duration_aggregation": "sum_completed_correlated_intervals",
     "duplicate_arguments": "canonical-json-exact-v1",
     "path_normalization": "project-relative-posix-lexical-v1",
     "git_status": "porcelain-v1-no-rename-reclassification",
     "path_classifier": "agent-bench-path-classifier-v1",
     "tool_timing": "explicit-execution-boundary-only-v1",
+    "response_behavior": "proxy-final-response-exact-v1",
     "termination_precedence": [
         "precondition_failed",
         "preservation_failed",
@@ -625,6 +626,11 @@ def _calculate_behavior(
     repeated_shell = _repeated_shell_calls(tools)
     repeated_reads = _repeated_reads(events, tools)
     reasoning_only = _reasoning_only_turns(events)
+    response_behavior = _response_behavior_metrics(
+        requests,
+        responses,
+        complete_llm_capture,
+    )
     shell_calls = sum(
         call.category == "shell"
         or (call.category == "test" and call.start.payload.get("uses_shell") is True)
@@ -687,6 +693,23 @@ def _calculate_behavior(
             reasoning_only if complete_llm_capture and complete_tool_capture
             else _unavailable("turns", "capture_incomplete")
         ),
+        reasoning_only_responses=response_behavior["reasoning_only_responses"],
+        length_finished_responses=response_behavior["length_finished_responses"],
+        length_finished_without_tool_call=response_behavior[
+            "length_finished_without_tool_call"
+        ],
+        requests_before_first_model_tool_call=response_behavior[
+            "requests_before_first_model_tool_call"
+        ],
+        output_tokens_before_first_model_tool_call=response_behavior[
+            "output_tokens_before_first_model_tool_call"
+        ],
+        requests_before_first_model_edit_call=response_behavior[
+            "requests_before_first_model_edit_call"
+        ],
+        output_tokens_before_first_model_edit_call=response_behavior[
+            "output_tokens_before_first_model_edit_call"
+        ],
     )
 
 
@@ -1335,6 +1358,172 @@ def _reasoning_only_turns(events: tuple[NormalizedEvent, ...]) -> ScalarMetric:
     if any(turn not in response_visibility for turn in reasoning_turns):
         return _unavailable("turns", "source_not_exposed", events=tuple(evidence))
     return _available(len(reasoning_turns - action_turns - visible_turns), "turns", "deterministically_calculated", events=tuple(evidence))
+
+
+_MODEL_EDIT_TOOLS = frozenset(
+    {"apply_patch", "edit", "edit_file", "patch", "write", "write_file"}
+)
+_LENGTH_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def _response_behavior_metrics(
+    requests: list[NormalizedEvent],
+    responses: list[NormalizedEvent],
+    complete_llm_capture: bool,
+) -> dict[str, ScalarMetric]:
+    """Measure only model-emitted response behavior, never tool execution time.
+
+    Every value is derived from final proxy response observations correlated by
+    request ID.  A Hermes SQLite export may be delayed until process exit, so
+    it is deliberately not used as an execution-time surrogate here.
+    """
+    names = (
+        "reasoning_only_responses",
+        "length_finished_responses",
+        "length_finished_without_tool_call",
+        "requests_before_first_model_tool_call",
+        "output_tokens_before_first_model_tool_call",
+        "requests_before_first_model_edit_call",
+        "output_tokens_before_first_model_edit_call",
+    )
+    if not complete_llm_capture:
+        return {name: _unavailable("responses" if "responses" in name else "requests", "capture_incomplete") for name in names}
+
+    request_by_id: dict[str, NormalizedEvent] = {}
+    response_by_id: dict[str, NormalizedEvent] = {}
+    for request in requests:
+        request_id = request.payload.get("request_id")
+        if not isinstance(request_id, str) or request_id in request_by_id:
+            return {name: _unavailable("responses" if "responses" in name else "requests", "invalid_source") for name in names}
+        request_by_id[request_id] = request
+    for response in responses:
+        request_id = response.payload.get("request_id")
+        if not isinstance(request_id, str) or request_id not in request_by_id or request_id in response_by_id:
+            return {name: _unavailable("responses" if "responses" in name else "requests", "invalid_source") for name in names}
+        response_by_id[request_id] = response
+    if not requests or len(response_by_id) != len(requests):
+        return {name: _unavailable("responses" if "responses" in name else "requests", "capture_incomplete") for name in names}
+
+    ordered: list[tuple[int, NormalizedEvent, NormalizedEvent]] = []
+    for position, request in enumerate(requests, start=1):
+        index = _strict_int(request.payload.get("request_index"))
+        if index is None:
+            return {name: _unavailable("responses" if "responses" in name else "requests", "invalid_source") for name in names}
+        ordered.append((index, request, response_by_id[request.payload["request_id"]]))  # type: ignore[index]
+    ordered.sort(key=lambda item: item[0])
+
+    response_ids = tuple(response.event_id for _, _, response in ordered)
+    missing_response_fields = any(
+        "tool_calls" not in response.payload or "finish_reason" not in response.payload
+        for _, _, response in ordered
+    )
+    if missing_response_fields:
+        return {name: _unavailable("responses" if "responses" in name else "requests", "source_not_exposed", events=response_ids) for name in names}
+    invalid_response = any(
+        not isinstance(response.payload.get("tool_calls"), list)
+        or not isinstance(response.payload.get("finish_reason"), (str, type(None)))
+        for _, _, response in ordered
+    )
+    if invalid_response:
+        return {name: _unavailable("responses" if "responses" in name else "requests", "invalid_source", events=response_ids) for name in names}
+
+    visible_exposed = all(
+        isinstance(response.payload.get("visible_answer_present"), bool)
+        for _, _, response in ordered
+    )
+    if visible_exposed:
+        reasoning_only = sum(
+            isinstance(response.payload.get("reasoning_content"), str)
+            and bool(response.payload["reasoning_content"])
+            and response.payload["visible_answer_present"] is False
+            and not response.payload["tool_calls"]
+            for _, _, response in ordered
+        )
+        reasoning_only_metric = _available(
+            reasoning_only,
+            "responses",
+            "deterministically_calculated",
+            events=response_ids,
+        )
+    else:
+        reasoning_only_metric = _unavailable(
+            "responses", "source_not_exposed", events=response_ids
+        )
+
+    length_responses = [
+        response
+        for _, _, response in ordered
+        if response.payload.get("finish_reason") in _LENGTH_FINISH_REASONS
+    ]
+    length_metric = _available(
+        len(length_responses), "responses", "normalized_event_exact", events=response_ids
+    )
+    length_without_tool_metric = _available(
+        sum(not response.payload["tool_calls"] for response in length_responses),
+        "responses",
+        "deterministically_calculated",
+        events=response_ids,
+    )
+
+    def is_edit_call(call: object) -> bool | None:
+        if not isinstance(call, dict):
+            return None
+        function = call.get("function")
+        name = function.get("name") if isinstance(function, dict) else call.get("name")
+        if not isinstance(name, str):
+            return None
+        return name in _MODEL_EDIT_TOOLS
+
+    def before_first(predicate: object, label: str) -> tuple[ScalarMetric, ScalarMetric]:
+        boundary: int | None = None
+        evidence: list[str] = []
+        for index, request, response in ordered:
+            calls = response.payload["tool_calls"]
+            assert isinstance(calls, list)
+            matched = False
+            for call in calls:
+                value = predicate(call)  # type: ignore[operator]
+                if value is None:
+                    return (
+                        _unavailable("requests", "source_not_exposed", events=tuple(evidence + [response.event_id])),
+                        _unavailable("tokens", "source_not_exposed", events=tuple(evidence + [response.event_id])),
+                    )
+                matched = matched or value
+            if matched:
+                boundary = index
+                break
+            evidence.extend((request.event_id, response.event_id))
+        if boundary is None:
+            return (
+                _unavailable("requests", "event_not_observed", events=tuple(evidence)),
+                _unavailable("tokens", "event_not_observed", events=tuple(evidence)),
+            )
+        preceding = [(request, response) for index, request, response in ordered if index < boundary]
+        output_tokens = 0
+        for _, response in preceding:
+            output = _token_metric(response, "output_tokens")
+            if output.availability != "available":
+                return (
+                    _available(len(preceding), "requests", "deterministically_calculated", events=tuple(evidence)),
+                    _unavailable("tokens", "source_not_exposed", events=tuple(evidence)),
+                )
+            output_tokens += int(output.value)
+        return (
+            _available(len(preceding), "requests", "deterministically_calculated", events=tuple(evidence)),
+            _available(output_tokens, "tokens", "deterministically_calculated", events=tuple(evidence)),
+        )
+
+    request_before_tool, output_before_tool = before_first(lambda _call: True, "tool")
+    request_before_edit, output_before_edit = before_first(is_edit_call, "edit")
+    return {
+        "reasoning_only_responses": reasoning_only_metric,
+        "length_finished_responses": length_metric,
+        "length_finished_without_tool_call": length_without_tool_metric,
+        "requests_before_first_model_tool_call": request_before_tool,
+        "output_tokens_before_first_model_tool_call": output_before_tool,
+        "requests_before_first_model_edit_call": request_before_edit,
+        "output_tokens_before_first_model_edit_call": output_before_edit,
+    }
 
 
 def _sum_numstat(

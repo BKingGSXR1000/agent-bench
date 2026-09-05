@@ -53,7 +53,12 @@ from agent_bench.opencode import (
     verify_opencode_toolchain,
 )
 from agent_bench.opencode_run import execute_controlled_opencode_run
-from agent_bench.hermes import HermesError, inspect_hermes_toolchain, load_hermes_profile
+from agent_bench.hermes import (
+    HermesError,
+    inspect_hermes_toolchain,
+    load_hermes_profile,
+    load_hermes_profile_for_id,
+)
 from agent_bench.hermes_run import execute_controlled_hermes_run
 from agent_bench.supervisor import SupervisorError, run_startup_diagnostic
 from agent_bench.pi import PiError, inspect_pi_toolchain, load_pi_profile
@@ -76,6 +81,7 @@ from agent_bench.subject import SubjectError, load_frozen_subject
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
 from agent_bench.reporting import ReportError, build_report, export_public, report_status, verify_report
+from agent_bench.reasoning_screen import ReasoningScreenError, build_reasoning_screen_comparison
 from agent_bench.manual_review import (
     ManualReview, ManualReviewError, aggregate_reviews, build_quality_report, latest_reviews, load_protocol,
     prepare_review_copy, review_queue, review_root, save_review, validate_review_against_protocol,
@@ -492,6 +498,22 @@ def report_export_public(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"public_export={destination}")
+
+
+@report_app.command("reasoning-screen")
+def report_reasoning_screen(
+    control_root: Path = typer.Option(..., "--control-root", help="Existing completed Hermes-default R001 experiment output."),
+    screen_root: Path = typer.Option(..., "--screen-root", help="Completed Hermes reasoning-screen experiment output."),
+) -> None:
+    """Print a read-only default-control versus reasoning-profile comparison."""
+    try:
+        comparison = build_reasoning_screen_comparison(
+            control_root=control_root, screen_root=screen_root,
+        )
+    except ReasoningScreenError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(comparison, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 @review_app.command("status")
@@ -953,12 +975,17 @@ def hermes_run(experiment_path: Path, run_id: str, output_root: Path) -> None:
     if run_definition is None:
         typer.echo(f"Error: run ID is not in the expanded experiment: {run_id}", err=True)
         raise typer.Exit(code=1)
-    if run_definition.harness_id != "hermes" or run_definition.profile_id != "hermes-default-v1":
-        typer.echo("Error: M8 supports only Hermes profile hermes-default-v1", err=True)
+    if run_definition.harness_id != "hermes":
+        typer.echo("Error: selected run is not a Hermes run", err=True)
         raise typer.Exit(code=1)
     prompt = next(item for item in experiment.prompts if item.prompt_id == run_definition.prompt_id)
     try:
-        controlled = execute_controlled_hermes_run(run_definition=run_definition, prompt_content=prompt.content, output_root=output_root)
+        controlled = execute_controlled_hermes_run(
+            run_definition=run_definition,
+            prompt_content=prompt.content,
+            output_root=output_root,
+            hermes_profile=load_hermes_profile_for_id(run_definition.profile_id),
+        )
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

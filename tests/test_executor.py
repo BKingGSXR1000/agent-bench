@@ -97,6 +97,48 @@ def test_controlled_dispatch_publishes_the_sealed_artifact_manifest(tmp_path: Pa
     assert published == [sealed, sealed]
 
 
+def test_controlled_dispatch_resolves_the_requested_hermes_reasoning_profile_without_fallback(
+    tmp_path: Path, preserved_run: object, monkeypatch: object,
+) -> None:
+    """A future screen row must use its own controlled profile by ID."""
+    from agent_bench.executor import controlled_dispatch
+    import agent_bench.executor as executor
+
+    experiment = load_experiment(Path("experiments/pocket-ledger-v1-hermes-reasoning-screen-v1.yaml"))
+    subject = load_frozen_subject(Path("subjects/pocket-ledger-v1"))
+    run = next(item for item in expand_experiment(experiment) if item.profile_id == "hermes-reasoning-low-v1")
+    sealed = preserved_run.manifest  # type: ignore[attr-defined]
+    execution = SimpleNamespace(artifact_path=tmp_path / "artifact", artifact_manifest=sealed)
+    controlled = SimpleNamespace(run=execution, metrics=SimpleNamespace(root=tmp_path / "metrics"), context_analysis_path=tmp_path / "context", failed_run=None)
+    captured: list[object] = []
+
+    def fake_execute(**kwargs: object) -> object:
+        captured.append(kwargs["hermes_profile"])
+        return controlled
+
+    monkeypatch.setattr(executor, "execute_controlled_hermes_run", fake_execute)
+    monkeypatch.setattr(executor, "verify_artifact", lambda *_args, **_kwargs: sealed)
+    monkeypatch.setattr(executor, "verify_metrics_artifact", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(executor, "verify_context_analysis_artifact", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(executor, "publish_result_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(executor, "verify_published_result", lambda *_args, **_kwargs: None)
+    assert controlled_dispatch(experiment, subject)(run, tmp_path / "out")
+    assert len(captured) == 1
+    assert captured[0].profile_id == "hermes-reasoning-low-v1"  # type: ignore[union-attr]
+    assert captured[0].reasoning.request_fields == {"reasoning_effort": "low"}  # type: ignore[union-attr]
+
+
+def test_reasoning_screen_matrix_excludes_the_effectively_xhigh_default_control() -> None:
+    experiment = load_experiment(Path("experiments/pocket-ledger-v1-hermes-reasoning-screen-v1.yaml"))
+    rows = expand_experiment(experiment)
+    assert len(rows) == 45
+    assert {row.profile_id for row in rows} == {
+        "hermes-reasoning-off-v1", "hermes-reasoning-low-v1", "hermes-reasoning-medium-v1",
+    }
+    assert "hermes-default-v1" not in {row.profile_id for row in rows}
+    assert all(row.repetition_index == 1 for row in rows)
+
+
 def state_path_exists(root: Path) -> bool: return (root / "experiment-state.json").is_file()
 
 

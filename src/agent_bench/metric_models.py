@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_bench.models import Identifier, Sha256, canonical_sha256
 
 METRICS_SCHEMA_VERSION: Literal["1.0.0"] = "1.0.0"
-METRIC_SPEC_VERSION: Literal["1.0.1"] = "1.0.1"
+METRIC_SPEC_VERSION: Literal["1.0.2"] = "1.0.2"
 
 Availability = Literal["available", "unavailable", "not_applicable"]
 MetricMethod = Literal[
@@ -183,6 +183,15 @@ class BehaviorMetrics(MetricsModel):
     repeated_reads_of_unchanged_files: ScalarMetric
     repeated_identical_shell_commands: ScalarMetric
     turns_with_reasoning_but_no_action: ScalarMetric
+    # Added in metrics spec v1.0.2. Null denotes an older immutable metrics-v1
+    # record; new calculations always populate these source-aware values.
+    reasoning_only_responses: ScalarMetric | None = None
+    length_finished_responses: ScalarMetric | None = None
+    length_finished_without_tool_call: ScalarMetric | None = None
+    requests_before_first_model_tool_call: ScalarMetric | None = None
+    output_tokens_before_first_model_tool_call: ScalarMetric | None = None
+    requests_before_first_model_edit_call: ScalarMetric | None = None
+    output_tokens_before_first_model_edit_call: ScalarMetric | None = None
 
     @model_validator(mode="after")
     def validate_categories(self) -> BehaviorMetrics:
@@ -242,9 +251,9 @@ class RunMetrics(MetricsModel):
     """Complete immutable deterministic measurements for one preserved run."""
 
     metrics_id: str = Field(min_length=1)
-    metric_spec_version: Literal["1.0.0", "1.0.1"] = METRIC_SPEC_VERSION
+    metric_spec_version: Literal["1.0.0", "1.0.1", "1.0.2"] = METRIC_SPEC_VERSION
     calculator_name: Literal["agent-bench-metrics"] = "agent-bench-metrics"
-    calculator_version: Literal["1.0.0", "1.0.1"] = "1.0.1"
+    calculator_version: Literal["1.0.0", "1.0.1", "1.0.2"] = "1.0.2"
     calculator_configuration_digest: Sha256
     run_id: Identifier
     input_identity: MetricsInputIdentity

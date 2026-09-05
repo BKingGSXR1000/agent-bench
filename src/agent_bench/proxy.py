@@ -78,6 +78,7 @@ class ResponseObservations:
     output_tokens: int | None
     reasoning_tokens: int | None
     reasoning_content: str | None
+    visible_answer_present: bool | None
     finish_reason: str | None
     tool_calls: tuple[object, ...]
     usage: dict[str, object] | None
@@ -357,6 +358,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             "duration_ns": time.monotonic_ns() - started_ns,
             "finish_reason": observations.finish_reason,
             "reasoning_content": observations.reasoning_content,
+            "visible_answer_present": observations.visible_answer_present,
             "tool_calls": list(observations.tool_calls),
             "usage": observations.usage,
             "token_source": "api_exact",
@@ -459,6 +461,8 @@ def extract_response_observations(body: bytes, content_type: str) -> ResponseObs
     reasoning_tokens: int | None = None
     finish_reason: str | None = None
     reasoning_parts: list[str] = []
+    visible_parts: list[str] = []
+    response_message_seen = False
     tool_calls: list[object] = []
     usage_value: dict[str, object] | None = None
     for item in objects:
@@ -484,9 +488,13 @@ def extract_response_observations(body: bytes, content_type: str) -> ResponseObs
             for value in (message, delta):
                 if not isinstance(value, dict):
                     continue
+                response_message_seen = True
                 reasoning = value.get("reasoning_content")
                 if isinstance(reasoning, str):
                     reasoning_parts.append(reasoning)
+                content = value.get("content")
+                if isinstance(content, str):
+                    visible_parts.append(content)
                 calls = value.get("tool_calls")
                 if isinstance(calls, list):
                     tool_calls.extend(calls)
@@ -495,6 +503,7 @@ def extract_response_observations(body: bytes, content_type: str) -> ResponseObs
         output_tokens=output_tokens,
         reasoning_tokens=reasoning_tokens,
         reasoning_content="".join(reasoning_parts) or None,
+        visible_answer_present=(bool("".join(visible_parts)) if response_message_seen else None),
         finish_reason=finish_reason,
         tool_calls=tuple(tool_calls),
         usage=usage_value,

@@ -1,0 +1,75 @@
+schema_version: 1.0.0
+identity_version: 2.0.0
+experiment_id: pocket-ledger-v1-hermes-reasoning-screen-v1
+name: Pocket Ledger v1 / Hermes reasoning screen v1
+description: "Hermes-only screen: one exact llama.cpp reasoning_effort field varies; completed hermes-default-v1 R001 is the read-only default/effective-xhigh control and is not part of this execution matrix."
+created_at: 2026-09-05T00:00:00Z
+# Operational only; identity v2 uses the checked-in bundle identity below.
+baseline_repository: ../subjects/pocket-ledger-v1/baseline-repo
+baseline_revision: 7326e6a06de7f693db5ac70a16363e47b620d4fb
+portable_baseline:
+  subject_id: pocket-ledger-v1
+  subject_version: 1.0.0
+  baseline_commit: 7326e6a06de7f693db5ac70a16363e47b620d4fb
+  baseline_tree: 663ea314b9d5f1b378abad28693085d0609386bc
+  baseline_bundle_sha256: 1c2c0cd14ec402f29817d7b0c2ee530380ab85dd19e765fdd94338fe6720086d
+fixed_environment:
+  fixed_environment_id: qwen38-rtx3090-llamacpp-v1
+  model:
+    model_identity_id: qwen38-27b-ud-q4-k-xl
+    name: Qwen 3.8 27B
+    quantization: Q4_K_XL
+    path: /mnt/starhunter/AI/models/Qwen3.8-27B/Qwen3.8-27B-UD-Q4_K_XL.gguf
+    filename: Qwen3.8-27B-UD-Q4_K_XL.gguf
+    file_size_bytes: 17923394624
+    sha256: bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372
+    gguf_metadata: {chat_template_sha256: 2d59a4438d68dc818c5a75db4edcf4c588e0976b113c5c87def7fc9c1168e955}
+  backend:
+    backend_identity_id: llamacpp-dc72703f-build10517
+    implementation: llama.cpp
+    executable: /home/bking/AI/llama.cpp/build/bin/llama-server
+    executable_sha256: 92a71ff10ed10f9a24d5af934770f86e1ac6ef0dfccb7d5612f73a2670bb123b
+    version: 0.1.2-dev build 10517
+    commit: dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe
+    build_metadata: {profile_sha256: 988117f073dcccdec65f72171920b32feb7ff4700bb93c96125fa85ac07a574e, template_sha256: 2d59a4438d68dc818c5a75db4edcf4c588e0976b113c5c87def7fc9c1168e955}
+  hardware:
+    hardware_identity_id: rtx3090-single-v1
+    name: fixed RTX 3090 benchmark host
+    cpu_architecture: x86_64
+    gpu_model: NVIDIA GeForce RTX 3090
+    gpu_count: 1
+    gpu_uuids: [GPU-63f9c2ad-4dbc-962b-b314-a652bf28fc0d]
+    vram_bytes: 25769803776
+    preconditions: {exclusive_compute: true, telemetry_required: true}
+  server_parameters: {context_size: 107520, parallel: 1, batch_size: 128, ubatch_size: 128, gpu_layers: all, cache_type_k: q8_0, cache_type_v: q8_0, flash_attention: on, speculative_type: none, reasoning: on, template_id: qwen38-agent-bench-v1}
+  # Retained unchanged from the completed baseline experiment. Hermes's
+  # observed per-request max_tokens remains captured at the proxy boundary.
+  generation: {temperature: 1.0, top_p: 0.95, top_k: 20, min_p: 0.0, seed: 1001, seed_control: controlled, max_output_tokens: 16384, context_size: 107520, reasoning: {backend: on}}
+  restart_policy: per_run
+  readiness_policy: health-200-json-ok-v1
+  environment_allowlist: [HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, XDG_STATE_HOME, CUDA_VISIBLE_DEVICES, LANG, LC_ALL, TZ]
+harnesses:
+  - {harness_id: hermes, display_name: Hermes, version: 0.21.0, executable: /home/bking/AI/agent-bench/toolchains/hermes/0.21.0/venv/bin/hermes, upstream_project: NousResearch/hermes-agent, supported_raw_capture_sources: [sqlite, usage-json, proxy]}
+harness_profiles:
+  - {profile_id: hermes-reasoning-off-v1, harness_id: hermes, profile_version: 1.0.0, kind: benchmark_specific, upstream_defaults_source: Hermes-0.21.0-fresh-default, settings: {profile_sha256: aea4da6e4e27fa7c6635996fccc328f718cc585d8d31d20ebd130638c18ad494, config_sha256: c6d187a5355518744ae0b9e29d4eb19a5addcf3b54454e45c19c8ed3ee51c9c0, endpoint: local-openai-proxy-v1, reasoning_request_fields: {reasoning_effort: none}, template_effect: enable_thinking_false}, deviations: [local-endpoint, oneshot, isolated-state, reasoning-effort-none]}
+  - {profile_id: hermes-reasoning-low-v1, harness_id: hermes, profile_version: 1.0.0, kind: benchmark_specific, upstream_defaults_source: Hermes-0.21.0-fresh-default, settings: {profile_sha256: 6f68a74aeee75589eb72ff7d5a29e731704db3ff65b6af647a357aa606ebcd55, config_sha256: 0cbb8aad5c60a5ac74ef76cdc581fc5c5cd1d672f622f939a9fbc3280134c81f, endpoint: local-openai-proxy-v1, reasoning_request_fields: {reasoning_effort: low}, template_effect: low_instruction}, deviations: [local-endpoint, oneshot, isolated-state, reasoning-effort-low]}
+  - {profile_id: hermes-reasoning-medium-v1, harness_id: hermes, profile_version: 1.0.0, kind: benchmark_specific, upstream_defaults_source: Hermes-0.21.0-fresh-default, settings: {profile_sha256: b0b96fbb3e98a7527e2e8fdfe6f9e0496372006007c085b3f93171659a1d6447, config_sha256: 077d646fdeb8343377806ee7ae83db32909dbdbe7859377075c4f4f35c91e604, endpoint: local-openai-proxy-v1, reasoning_request_fields: {reasoning_effort: medium}, template_effect: enabled_no_additional_instruction}, deviations: [local-endpoint, oneshot, isolated-state, reasoning-effort-medium]}
+prompts:
+  - {prompt_id: entry-category-vague, semantic_task_id: entry-category, variant_label: vague, path: ../subjects/pocket-ledger-v1/prompts/entry-category-vague.txt, sha256: 78480a6e937fb11eabc588838048601437704153cbef0fcca0f7b606ff106cb1}
+  - {prompt_id: entry-category-normal, semantic_task_id: entry-category, variant_label: normal, path: ../subjects/pocket-ledger-v1/prompts/entry-category-normal.txt, sha256: bad177d38573b267665d8d732d4b9e01d35e7e66c0462d13c603e8defcb13af5}
+  - {prompt_id: entry-category-precise, semantic_task_id: entry-category, variant_label: precise, path: ../subjects/pocket-ledger-v1/prompts/entry-category-precise.txt, sha256: d75859f2f71480f50c6986d45d4f7f0af797bb85498000c47b907533fa655b68}
+  - {prompt_id: entry-delete-vague, semantic_task_id: entry-delete, variant_label: vague, path: ../subjects/pocket-ledger-v1/prompts/entry-delete-vague.txt, sha256: 69684f8e220ad40973e9c75f0919153804c04c6b5f6bae730b2bacb95934958d}
+  - {prompt_id: entry-delete-normal, semantic_task_id: entry-delete, variant_label: normal, path: ../subjects/pocket-ledger-v1/prompts/entry-delete-normal.txt, sha256: 7f8378260a1175bccf47b54e132fcd52faf6df4977cc587383adb948fbc7cfcc}
+  - {prompt_id: entry-delete-precise, semantic_task_id: entry-delete, variant_label: precise, path: ../subjects/pocket-ledger-v1/prompts/entry-delete-precise.txt, sha256: 4d1a5633ef3529b93ef4e6ac2428926da121f28e4306e5ddb43a94ed25f877a4}
+  - {prompt_id: entry-filter-vague, semantic_task_id: entry-filter, variant_label: vague, path: ../subjects/pocket-ledger-v1/prompts/entry-filter-vague.txt, sha256: 3955849f281df84818022306f960a597bf4c7b0d5ebf1f8f5bd263f94a655661}
+  - {prompt_id: entry-filter-normal, semantic_task_id: entry-filter, variant_label: normal, path: ../subjects/pocket-ledger-v1/prompts/entry-filter-normal.txt, sha256: a3b249c6f4a2ed482f6e86878e110be649ce039fb1f591429228415ab9499547}
+  - {prompt_id: entry-filter-precise, semantic_task_id: entry-filter, variant_label: precise, path: ../subjects/pocket-ledger-v1/prompts/entry-filter-precise.txt, sha256: b22ee2632576d4a18b09a6783f42d6e31219f60ae9fa05e9ed3bccdf59e64d17}
+  - {prompt_id: keyboard-entry-vague, semantic_task_id: keyboard-entry, variant_label: vague, path: ../subjects/pocket-ledger-v1/prompts/keyboard-entry-vague.txt, sha256: a15299aae40b7ed4041a159079e5cfc47364b295ee35b1f6f04fe2467d88fdf4}
+  - {prompt_id: keyboard-entry-normal, semantic_task_id: keyboard-entry, variant_label: normal, path: ../subjects/pocket-ledger-v1/prompts/keyboard-entry-normal.txt, sha256: 0986a14bd309fb17ed472e7f40431a8a62cd65696bea2ab58fb9dfb0ab1c67e0}
+  - {prompt_id: keyboard-entry-precise, semantic_task_id: keyboard-entry, variant_label: precise, path: ../subjects/pocket-ledger-v1/prompts/keyboard-entry-precise.txt, sha256: 568c5fb7ec1c504925015cac88f619e41ee8bffc75f8e32092d00e1bfe12c154}
+  - {prompt_id: monthly-summary-vague, semantic_task_id: monthly-summary, variant_label: vague, path: ../subjects/pocket-ledger-v1/prompts/monthly-summary-vague.txt, sha256: 864f0d0849b8113e828cbd639e39ce562087b6b715cd2721ac0bcc893dd0d45a}
+  - {prompt_id: monthly-summary-normal, semantic_task_id: monthly-summary, variant_label: normal, path: ../subjects/pocket-ledger-v1/prompts/monthly-summary-normal.txt, sha256: 775fce47129887929e806e6f6e21288077a9146004f9efe8229baf03d8330660}
+  - {prompt_id: monthly-summary-precise, semantic_task_id: monthly-summary, variant_label: precise, path: ../subjects/pocket-ledger-v1/prompts/monthly-summary-precise.txt, sha256: d848747f42c4f8e4e0eb21ac91b778d8ac1303ef86e1d37632382c399c6c4bfe}
+repetitions: 1
+ordering: {mode: canonical}
+run_limits: {wall_timeout_seconds: 900.0}

@@ -1,0 +1,21 @@
+schema_version: 1.0.0
+profile_id: hermes-reasoning-off-v1
+profile_version: 1.0.0
+toolchain_identity_file: ../../../toolchains/hermes/0.21.0/identity.json
+config_file: config.yaml
+config_sha256: c6d187a5355518744ae0b9e29d4eb19a5addcf3b54454e45c19c8ed3ee51c9c0
+proxy_base_url: http://127.0.0.1:18081/v1
+provider_id: agent-bench
+model_id: qwen3.8-27b
+invocation:
+  output_mode: final_text_with_usage_json
+  non_interactive: true
+  prompt_delivery: argv_element_exact_utf8
+  approval_mode: upstream_oneshot_auto_bypass
+  toolsets: upstream_default
+  project_local_discovery: enabled
+deviations: [local-endpoint, oneshot, isolated-state, reasoning-effort-none]
+reasoning:
+  setting: "off"
+  request_fields: {reasoning_effort: none}
+  template_effect: "llama.cpp maps none to enable_thinking=false; no reasoning-effort instruction is injected"

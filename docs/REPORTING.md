@@ -101,6 +101,7 @@ Cross-run reports support filtering and grouping by:
 
 - harness;
 - harness profile/settings;
+- harness profile × semantic task and harness profile × prompt variant;
 - prompt ID;
 - semantic task ID and prompt variant;
 - harness/profile/prompt combination;

@@ -18,6 +18,7 @@ from agent_bench.metrics import (
     _divide_metrics,
     _interval_sum,
     _model_exchange_events,
+    _response_behavior_metrics,
     _token_metric,
     _tool_identity_valid,
     _available,
@@ -112,6 +113,34 @@ def test_calculates_behavior_duplicates_repeated_reads_and_formulas(metrics_run:
     assert metrics.derived.tokens_per_edit.value == 560.0
     assert metrics.derived.failed_tool_call_rate.value == 0.0
     assert metrics.derived.reasoning_to_output_ratio.value == 0.4
+
+
+def test_response_behavior_metrics_are_proxy_response_exact(metrics_run: object) -> None:
+    events = list(load_normalized_events(metrics_run.normalized_event_path))  # type: ignore[attr-defined]
+    requests, responses = _model_exchange_events(tuple(events))
+    assert len(requests) == len(responses) == 4
+    replacement: dict[str, dict[str, object]] = {
+        str(responses[0].payload["request_id"]): {"reasoning_content": "plan", "visible_answer_present": False, "tool_calls": [], "finish_reason": "stop"},
+        str(responses[1].payload["request_id"]): {"reasoning_content": None, "visible_answer_present": False, "tool_calls": [{"function": {"name": "search_files"}}], "finish_reason": "stop"},
+        str(responses[2].payload["request_id"]): {"reasoning_content": None, "visible_answer_present": False, "tool_calls": [{"function": {"name": "patch"}}], "finish_reason": "stop"},
+        str(responses[3].payload["request_id"]): {"reasoning_content": None, "visible_answer_present": True, "tool_calls": [], "finish_reason": "length"},
+    }
+    responses = [event.model_copy(update={"payload": {**event.payload, **replacement[str(event.payload["request_id"])]}}) for event in responses]
+    metrics = _response_behavior_metrics(requests, responses, True)
+    assert metrics["reasoning_only_responses"].value == 1
+    assert metrics["length_finished_responses"].value == 1
+    assert metrics["length_finished_without_tool_call"].value == 1
+    assert metrics["requests_before_first_model_tool_call"].value == 1
+    assert metrics["requests_before_first_model_edit_call"].value == 2
+    assert metrics["output_tokens_before_first_model_tool_call"].availability == "available"
+    assert metrics["output_tokens_before_first_model_edit_call"].availability == "available"
+
+
+def test_reasoning_only_response_requires_exact_visible_answer_capture(metrics_run: object) -> None:
+    requests, responses = _model_exchange_events(load_normalized_events(metrics_run.normalized_event_path))  # type: ignore[attr-defined]
+    metrics = _response_behavior_metrics(requests, responses, True)
+    assert metrics["reasoning_only_responses"].availability == "unavailable"
+    assert metrics["reasoning_only_responses"].unavailable_reason == "source_not_exposed"
 
 
 def test_model_exchange_filter_excludes_proxy_metadata_requests(metrics_run: object) -> None:
@@ -485,5 +514,5 @@ def test_metrics_cli_calculate_and_show(metrics_run: object, tmp_path: Path) -> 
 
     show = cli.invoke(app, ["metrics", "show", str(metrics_root)])
     assert show.exit_code == 0, show.output
-    assert '"metric_spec_version": "1.0.1"' in show.output
+    assert '"metric_spec_version": "1.0.2"' in show.output
     assert '"termination_class": "success"' in show.output
