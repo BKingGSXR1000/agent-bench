@@ -252,6 +252,70 @@ def test_group_comparison_bars_have_local_numeric_sorting_after_filters() -> Non
     assert "<script src=" not in output and "cdn" not in output.lower()
 
 
+def test_variant_comparison_is_metric_selectable_and_uses_only_matched_deterministic_observations() -> None:
+    """The ranking view is a metric view, never an efficiency or quality score."""
+    def raw_run(profile: str, value: float | None, *, seed: int = 1001) -> dict[str, object]:
+        return {
+            "experiment_id": f"screen-{profile}", "run_id": f"opaque-{profile}-{seed}",
+            "harness": "hermes", "profile": profile,
+            "reasoning_setting": {"hermes-default-v1": "xhigh", "hermes-reasoning-low-v1": "low"}[profile],
+            "semantic_task": "entry-category", "prompt_variant": "normal", "prompt_sha256": "p" * 64,
+            "repetition": 1, "seed": seed,
+            "metrics": {
+                "timing.wall_time_seconds.value": value,
+                "tokens.output_tokens_total.value": 100 if value is not None else None,
+                "behavior.requests_before_first_model_tool_call.value": 2,
+            },
+        }
+
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 0, "completed": 0, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {"subject_id": "pocket-ledger"}},
+        "summary_environment": {}, "runs": [], "summaries": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [],
+        "matched_comparison": {"raw_runs": [
+            raw_run("hermes-default-v1", 10.0), raw_run("hermes-reasoning-low-v1", 8.0),
+            raw_run("hermes-default-v1", 12.0, seed=1002), raw_run("hermes-reasoning-low-v1", None, seed=1002),
+        ]},
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "Variant Comparison" in output and "not an overall efficiency score or quality ranking" in output
+    assert "variantMetricLabels" in output
+    assert "Wall time" in output and "Output tokens" in output
+    assert "Requests before first model tool" in output
+    # The selector is populated from finite values in raw immutable report data;
+    # no unavailable or inferred reasoning time/token metric is introduced.
+    assert "function variantMetricKeys(rows)" in output
+    assert "Object.entries(row.metrics||{})" in output
+    assert "reasoning_time_seconds" not in output
+    assert "reasoning_tokens" not in output
+    # Category identity includes harness, profile, and effective setting, while
+    # matching requires subject/task/exact prompt hash/repetition/seed.
+    assert "function variantDescriptors(rows)" in output
+    assert "${titleCase(row.harness)} · ${profileLabel(row.profile)}" in output
+    assert "row.prompt_sha256,row.repetition,row.seed" in output
+    assert "function variantMatchable(row)" in output
+    assert "rows without task, exact prompt SHA-256, repetition, or seed provenance are explicitly excluded" in output
+    assert "matched by subject, task, exact prompt SHA-256, repetition, and seed" in output
+    # Median/Q1/Q3 are calculated only from matched values. Missing metrics are
+    # explicit, and both sort directions remain numeric with N/A last.
+    assert "median:type7(observed,.5)" in output
+    assert "q1:observed.length>1?type7(observed,.25):null" in output
+    assert "n_unavailable:total-observed.length" in output
+    assert "function orderVariantRows(rows,order)" in output
+    assert "order==='lowest'?a-b:b-a" in output
+    assert "if(am!==bm)return am?1:-1" in output
+    # Delta values are candidate-reference and percentages have a defined zero
+    # reference edge case. Rendering works from copied summaries, never sorting
+    # the sealed d.matched_comparison.raw_runs source.
+    assert "candidate-referenceValue" in output
+    assert "referenceValue===0?null" in output
+    assert "const copy=[...rows]" in output
+    assert "Prompt = All aggregates matched observations within each exact prompt SHA and seed" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
+
+
 def test_unified_report_combines_verified_roots_into_one_sealed_rich_report(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
