@@ -17,6 +17,11 @@ The existing completed `hermes-default-v1` R001 results are a read-only
 control. They are intentionally not placed in the execution matrix and must
 not be rerun merely for this comparison.
 
+The follow-up confirmation definition is
+`pocket-ledger-v1-hermes-reasoning-confirm-v1`. It selects only
+`repetition_indices: [2, 3]`, so its 90 rows are R002/R003 confirmations with
+seeds 1002/1003 and no intentionally pending R001 rows.
+
 ## Exact reasoning mapping
 
 The fixed server has `--reasoning on`; this enables Qwen reasoning parsing and
@@ -47,6 +52,23 @@ independent reasoning-strength control, and it is not varied in this screen.
 No profile varies tools, one-shot mode, project discovery, endpoint, model,
 template, server argv, sampling configuration, model output cap, seed, or
 timeout.
+
+## Verified end-to-end mode behavior
+
+The completed R001 screen verified the pinned llama.cpp build and pinned Jinja
+template apply the intended modes at the request/template boundary:
+
+| Mode | Effective rendered behavior |
+| --- | --- |
+| default / effective xhigh | xhigh reasoning instruction plus an open `<think>` prefix |
+| medium | no additional reasoning instruction plus an open `<think>` prefix |
+| low | low, brief-thinking instruction plus an open `<think>` prefix |
+| off / none | thinking disabled and an empty closed `<think>\n\n</think>` block |
+
+The default control omits the raw `reasoning_effort` field; it is still
+effective xhigh because the fixed template supplies that default. The explicit
+profiles preserve their request-field evidence independently of the rendered
+behavior.
 
 The fixed template is
 `environment/templates/qwen38-agent-bench-v1.jinja`, SHA256

@@ -14,6 +14,7 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    StrictInt,
     computed_field,
     field_validator,
     model_validator,
@@ -359,7 +360,12 @@ class ExperimentDefinition(PersistedModel):
     harnesses: tuple[HarnessDefinition, ...] = Field(min_length=1)
     harness_profiles: tuple[HarnessProfile, ...] = Field(min_length=1)
     prompts: tuple[PromptDefinition, ...] = Field(min_length=1)
-    repetitions: int = Field(ge=1)
+    # Legacy definitions use a count. New confirmation experiments can select
+    # concrete one-based repetitions without creating intentionally pending
+    # earlier rows. Their identity representation is handled explicitly below
+    # so the legacy count-based payload remains byte-for-byte compatible.
+    repetitions: int | None = Field(default=None, ge=1)
+    repetition_indices: tuple[StrictInt, ...] | None = Field(default=None, min_length=1)
     ordering: ExecutionOrdering = Field(default_factory=ExecutionOrdering)
     run_limits: RunLimits = Field(default_factory=RunLimits)
 
@@ -370,8 +376,23 @@ class ExperimentDefinition(PersistedModel):
             raise ValueError("created_at must include a UTC offset")
         return value.astimezone(timezone.utc)
 
+    @field_validator("repetition_indices")
+    @classmethod
+    def validate_repetition_indices(
+        cls, value: tuple[int, ...] | None,
+    ) -> tuple[int, ...] | None:
+        if value is None:
+            return None
+        if any(index < 1 for index in value):
+            raise ValueError("repetition_indices values must be positive integers")
+        if len(set(value)) != len(value):
+            raise ValueError("repetition_indices values must be unique")
+        return tuple(sorted(value))
+
     @model_validator(mode="after")
     def validate_relationships(self) -> ExperimentDefinition:
+        if (self.repetitions is None) == (self.repetition_indices is None):
+            raise ValueError("exactly one of repetitions or repetition_indices is required")
         if self.identity_version == "2.0.0" and self.portable_baseline is None:
             raise ValueError("identity_version 2.0.0 requires portable_baseline")
         if self.identity_version == "2.0.0":
@@ -410,9 +431,23 @@ class ExperimentDefinition(PersistedModel):
             )
         return self
 
+    @property
+    def effective_repetition_indices(self) -> tuple[int, ...]:
+        """Return the canonical, one-based indices selected by this matrix."""
+        if self.repetition_indices is not None:
+            return self.repetition_indices
+        assert self.repetitions is not None
+        return tuple(range(1, self.repetitions + 1))
+
     def _definition_identity(self) -> object:
         data = super()._definition_identity()
         assert isinstance(data, dict)
+        # Older count-based definitions must retain their historical digest.
+        # The optional field was absent from their pre-feature identity payload.
+        if self.repetition_indices is None:
+            data.pop("repetition_indices", None)
+        else:
+            data.pop("repetitions", None)
         if self.identity_version == "2.0.0":
             data.pop("baseline_repository", None)
             data.pop("baseline_revision", None)
@@ -486,11 +521,16 @@ class ExperimentDefinition(PersistedModel):
                 "harnesses": harnesses,
                 "harness_profiles": profiles,
                 "prompts": prompts,
-                "repetitions": self.repetitions,
                 "run_limits": self.run_limits.model_dump(
                     mode="json", exclude={"definition_digest"}
                 ),
             }
+        if self.repetition_indices is None:
+            # Preserve the exact historical count-based matrix payload.
+            payload["repetitions"] = self.repetitions
+        else:
+            # Explicit experiment identities bind the canonical selected set.
+            payload["repetition_indices"] = list(self.effective_repetition_indices)
         if self.identity_version == "2.0.0":
             assert self.portable_baseline is not None
             payload["portable_baseline"] = _portable_baseline_payload(

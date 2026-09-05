@@ -35,7 +35,7 @@ def generate_run_definitions(
     for profile in profiles:
         harness = harnesses[profile.harness_id]
         for prompt in prompts:
-            for repetition_index in range(1, experiment.repetitions + 1):
+            for repetition_index in experiment.effective_repetition_indices:
                 matrix_index += 1
                 runs.append(
                     _make_run_definition(

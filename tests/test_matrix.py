@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 from collections import Counter, defaultdict
+from pathlib import Path
 
 from agent_bench.config import load_experiment
 from agent_bench.matrix import (
@@ -51,6 +53,50 @@ def test_repetitions_are_one_based_for_every_matrix_cell(
 
     assert repetitions
     assert all(indices == [1, 2] for indices in repetitions.values())
+
+
+def test_count_based_repetitions_three_remain_one_based(
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    data = copy.deepcopy(experiment_fixture.data)
+    data["repetitions"] = 3
+    experiment_fixture.write(data)
+    assert load_experiment(experiment_fixture.path).effective_repetition_indices == (1, 2, 3)
+
+
+def test_explicit_repetition_indices_generate_only_selected_rows_and_seeds(
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    data = copy.deepcopy(experiment_fixture.data)
+    data.pop("repetitions")
+    data["repetition_indices"] = [3, 2]
+    experiment_fixture.write(data)
+    experiment = load_experiment(experiment_fixture.path)
+    runs = generate_run_definitions(experiment)
+    assert experiment.effective_repetition_indices == (2, 3)
+    assert {run.repetition_index for run in runs} == {2, 3}
+    assert {run.generation_seed for run in runs if run.repetition_index == 2} == {1002}
+    assert {run.generation_seed for run in runs if run.repetition_index == 3} == {1003}
+    assert all("-r001-" not in run.run_id for run in runs)
+    same_cell = [run for run in runs if run.profile_id == "hermes-default" and run.prompt_id == "task-normal"]
+    assert [run.repetition_index for run in same_cell] == [2, 3]
+    assert len({run.run_id for run in same_cell}) == 2
+    changed = copy.deepcopy(data)
+    changed["repetition_indices"] = [2, 4]
+    experiment_fixture.write(changed)
+    assert load_experiment(experiment_fixture.path).matrix_digest != experiment.matrix_digest
+
+
+def test_checked_in_hermes_reasoning_confirmation_is_exactly_r002_and_r003() -> None:
+    experiment = load_experiment(
+        Path("experiments/pocket-ledger-v1-hermes-reasoning-confirm-v1.yaml")
+    )
+    runs = expand_experiment(experiment)
+    assert len(runs) == 90
+    assert experiment.effective_repetition_indices == (2, 3)
+    assert {run.repetition_index for run in runs} == {2, 3}
+    assert {run.generation_seed for run in runs} == {1002, 1003}
+    assert all("-r001-" not in run.run_id for run in runs)
 
 
 def test_generation_seed_is_deterministic_by_repetition_across_harnesses(

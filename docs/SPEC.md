@@ -86,7 +86,7 @@ evidence, and M6 the controlled OpenCode boundary.
 
 ## 5. Experiment definitions
 
-An experiment references exactly one fixed environment, one immutable Git baseline, one or more harness/profile selections, one or more prompt definitions, and a positive repetition count. The expanded run matrix is the Cartesian product of harness/profile, prompt, and repetition unless an explicitly versioned selection rule says otherwise.
+An experiment references exactly one fixed environment, one immutable Git baseline, one or more harness/profile selections, one or more prompt definitions, and either a positive repetition count or an explicit positive repetition-index set. `repetitions: N` retains its historical meaning of indices `1..N`. `repetition_indices: [2, 3]` selects only R002 and R003; it is mutually exclusive with `repetitions`, canonicalized in ascending order, and included in a new experiment's matrix identity. The actual one-based index remains in every run ID and maps to intended seed `1000 + index`. The expanded run matrix is the Cartesian product of harness/profile, prompt, and selected repetition index unless an explicitly versioned selection rule says otherwise.
 
 Execution order may be sequential, interleaved, or deterministically shuffled. A shuffled order records its algorithm and seed. A seed used for model generation is distinct from the matrix-order seed. When a harness cannot control a requested seed, the run records that limitation rather than claiming equivalence.
 

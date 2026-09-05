@@ -94,7 +94,9 @@ Required fields:
 - `baseline_repository` and unresolved input reference plus resolved-commit policy;
 - ordered harness/profile selections;
 - ordered prompt IDs and digests;
-- positive `repetitions`;
+- either positive `repetitions` (legacy count semantics, indices `1..N`) or
+  positive, unique `repetition_indices` (explicit selected indices), but not
+  both;
 - execution-order policy (`sequential`, `interleaved`, or deterministic `shuffled`);
 - matrix-order algorithm/version and seed when shuffled;
 - task limits and preservation policy IDs/versions; and

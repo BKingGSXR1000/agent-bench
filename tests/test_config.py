@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from pathlib import Path
 from collections.abc import Callable
 
 import pytest
@@ -10,6 +11,35 @@ from pydantic import ValidationError
 from agent_bench.config import ExperimentConfigError, load_experiment
 from agent_bench.models import SUPPORTED_HARNESS_IDS
 from conftest import ExperimentFixture
+
+
+@pytest.mark.parametrize(
+    ("path", "definition_digest", "matrix_digest", "first_run_id"),
+    [
+        (
+            "experiments/pocket-ledger-v1.yaml",
+            "2dea097c2a8142076d11d00b88eb17dbe5192134d4cd140a19e933c2732ff82a",
+            "4955ce2a5556e402080455511b2f3aa0ecef134308751f1640b80f4ca71ebab1",
+            "hermes-hermes-default-v1-keyboard-entry-vague-r001-e041841d2df985953b43d6c4",
+        ),
+        (
+            "experiments/pocket-ledger-v1-hermes-reasoning-screen-v1.yaml",
+            "e98c1eb6396269877628f11f428da2bc76cee131349f6a03e553c9be809443c3",
+            "f82cc608539cece72e10f5c16b1c2411efce29ebacd4367ddf2e6df3ec28179c",
+            "hermes-hermes-reasoning-low-v1-entry-category-normal-r001-52f596c916666fa34177a588",
+        ),
+    ],
+)
+def test_existing_count_based_experiments_retain_sealed_identities(
+    path: str, definition_digest: str, matrix_digest: str, first_run_id: str,
+) -> None:
+    """Adding explicit indices must not change existing count-based evidence."""
+    from agent_bench.matrix import expand_experiment
+
+    experiment = load_experiment(Path(path))
+    assert experiment.definition_digest == definition_digest
+    assert experiment.matrix_digest == matrix_digest
+    assert expand_experiment(experiment)[0].run_id == first_run_id
 
 
 def test_loads_valid_experiment_configuration(
@@ -43,6 +73,11 @@ def test_persisted_models_are_frozen(
     ("mutation", "message"),
     [
         (lambda data: data.update(repetitions=0), "greater than or equal to 1"),
+        (lambda data: data.update(repetitions=2, repetition_indices=[2, 3]), "exactly one of repetitions or repetition_indices"),
+        (lambda data: (data.pop("repetitions"), data.update(repetition_indices=[2, 2])), "must be unique"),
+        (lambda data: (data.pop("repetitions"), data.update(repetition_indices=[0])), "must be positive"),
+        (lambda data: (data.pop("repetitions"), data.update(repetition_indices=[-1])), "must be positive"),
+        (lambda data: (data.pop("repetitions"), data.update(repetition_indices=["2"])), "valid integer"),
         (
             lambda data: data["harness_profiles"][0].update(
                 harness_id="opencode"

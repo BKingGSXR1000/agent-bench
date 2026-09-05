@@ -2,8 +2,10 @@ from pathlib import Path
 import hashlib
 from types import SimpleNamespace
 
+import pytest
+
 from agent_bench.config import load_experiment
-from agent_bench.executor import DispatchOutcome, ExperimentExecutor, load_or_create, status
+from agent_bench.executor import DispatchOutcome, ExecutorError, ExperimentExecutor, load_or_create, status
 from agent_bench.matrix import expand_experiment
 from agent_bench.models import PortableBaselineIdentity
 from agent_bench.models import RunDefinition
@@ -31,6 +33,41 @@ def test_executor_failure_continues(tmp_path: Path, experiment_fixture: object) 
     assert [r.state for r in state.runs[:3]] == ["failed", "completed", "completed"]
     assert state.runs[0].failure_domain == "harness_runtime"
     assert state.runs[0].failure_phase == "running"
+
+
+def test_explicit_repetition_indices_complete_without_intentionally_pending_rows(
+    tmp_path: Path, experiment_fixture: object,
+) -> None:
+    fixture = experiment_fixture  # type: ignore[assignment]
+    data = dict(fixture.data)
+    data.pop("repetitions")
+    data["repetition_indices"] = [2, 3]
+    fixture.write(data)
+    experiment = load_experiment(fixture.path)
+    executor = ExperimentExecutor(experiment, tmp_path / "out", lambda _run, _root: True)
+    state = executor.run()
+    assert len(state.runs) == 24
+    assert status(state)["counts"] == {
+        "pending": 0, "preflight": 0, "running": 0, "preserving": 0,
+        "analyzing": 0, "completed": 24, "failed": 0, "interrupted": 0, "invalid": 0,
+    }
+
+
+def test_resume_rejects_changed_explicit_repetition_index_set(
+    tmp_path: Path, experiment_fixture: object,
+) -> None:
+    fixture = experiment_fixture  # type: ignore[assignment]
+    data = dict(fixture.data)
+    data.pop("repetitions")
+    data["repetition_indices"] = [2, 3]
+    fixture.write(data)
+    original = load_experiment(fixture.path)
+    ExperimentExecutor(original, tmp_path / "out", lambda _run, _root: True).run(limit=1)
+    changed = dict(data)
+    changed["repetition_indices"] = [2, 4]
+    fixture.write(changed)
+    with pytest.raises(ExecutorError, match="definition or expansion"):
+        ExperimentExecutor(load_experiment(fixture.path), tmp_path / "out", lambda _run, _root: True).run(resume=True)
 
 
 def test_controlled_lifecycle_does_not_emit_running_before_preflight_and_breaks_repeated_infra_failure(tmp_path: Path, experiment_fixture: object) -> None:
