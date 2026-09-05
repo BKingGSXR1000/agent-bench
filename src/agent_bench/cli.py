@@ -5,6 +5,7 @@ import shlex
 import shutil
 import signal
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -75,6 +76,11 @@ from agent_bench.subject import SubjectError, load_frozen_subject
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
 from agent_bench.reporting import ReportError, build_report, export_public, report_status, verify_report
+from agent_bench.manual_review import (
+    ManualReview, ManualReviewError, aggregate_reviews, build_quality_report, latest_reviews, load_protocol,
+    prepare_review_copy, review_queue, review_root, save_review, validate_review_against_protocol,
+)
+from agent_bench.review_dashboard import ReviewDashboardServer
 
 app = typer.Typer(
     add_completion=False,
@@ -136,6 +142,8 @@ report_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(report_app, name="report")
+review_app = typer.Typer(help="Human-authored M10 functional acceptance reviews; never changes benchmark evidence.", no_args_is_help=True)
+app.add_typer(review_app, name="review")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -446,10 +454,14 @@ def report_build(
 
 
 @report_app.command("status")
-def report_status_command(experiment_output: Path, json_output: bool = typer.Option(False, "--json")) -> None:
+def report_status_command(
+    experiment_output: Path,
+    report_root: Path | None = typer.Option(None, "--report-root", help="Derived report directory to inspect; default is EXPERIMENT_OUTPUT/report-v1."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
     """Show experiment completion and the derived report's integrity state."""
     try:
-        value = report_status(experiment_output)
+        value = report_status(experiment_output, report_root=report_root)
     except ReportError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -480,6 +492,122 @@ def report_export_public(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"public_export={destination}")
+
+
+@review_app.command("status")
+def review_status_command(experiment_output: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"), subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
+    """Show blinded review progress without exposing harness metadata."""
+    try:
+        queue = review_queue(experiment_output, experiment_definition, subject_root)
+        reviewed = sum(bool(item["reviewed"]) for item in queue)
+        typer.echo(json.dumps({"total": len(queue), "reviewed": reviewed, "unreviewed": len(queue)-reviewed, "review_root": str(review_root(experiment_output))}, sort_keys=True))
+    except (ManualReviewError, ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@review_app.command("serve")
+def review_serve(
+    experiment_output: Path,
+    experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"),
+    subject_root: Path = Path("subjects/pocket-ledger-v1"),
+    port: int = typer.Option(0, "--port", min=0, max=65535, help="Loopback port; 0 selects a free ephemeral port."),
+) -> None:
+    """Start a local-only browser workflow; Ctrl-C shuts it down without changing evidence."""
+    server = ReviewDashboardServer(("127.0.0.1", port), experiment_output, experiment_definition, subject_root)
+    address = server.server_address
+    queue = review_queue(experiment_output, experiment_definition, subject_root)
+    reviewable = [item for item in queue if item["state"] == "completed"]
+    reviewed = sum(bool(item["reviewed"]) for item in reviewable)
+    typer.echo(
+        f"url=http://127.0.0.1:{address[1]}/\n"
+        f"review_root={server.review_storage_root}\n"
+        f"progress={reviewed}/{len(reviewable)} completed-run reviews\n"
+        "shutdown=Press Ctrl-C; only the disposable restored review copies are removed."
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("dashboard_shutdown=received Ctrl-C")
+    finally:
+        server.server_close()
+        shutil.rmtree(server.runtime_root, ignore_errors=True)
+
+
+@review_app.command("next")
+def review_next(experiment_output: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"), subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
+    """Print the next blinded review and a JSON template for the human reviewer."""
+    queue = review_queue(experiment_output, experiment_definition, subject_root)
+    item = next((row for row in queue if not row["reviewed"] and row["state"] == "completed"), None)
+    if item is None:
+        typer.echo("no_unreviewed_completed_runs")
+        return
+    protocol, digest = load_protocol(subject_root)
+    task = str(item["semantic_task"])
+    template = {"semantic_task": task, "review_protocol_id": protocol["review_protocol_id"], "review_protocol_digest": digest,
+                "reviewer_id": "local-reviewer", "blind_review_id": item["blind_review_id"], "functional_outcome": None,
+                "task_criteria": [{"criterion_id": name, "outcome": None, "notes": None} for name in protocol["tasks"][task]["criteria"]],
+                "regression_criteria": [{"criterion_id": name, "outcome": None, "notes": None} for name in protocol["common_regression_criteria"]],
+                "regression_outcome": None, "review_completeness": "complete", "notes": None, "revision": 1}
+    blind = {key: value for key, value in item.items() if key not in {"run_id", "blind_sort"}}
+    typer.echo(json.dumps({"blind_review": blind, "template": template}, indent=2, sort_keys=True))
+
+
+@review_app.command("prepare")
+def review_prepare(experiment_output: Path, run_id: str, destination: Path, subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
+    """Restore one sealed result into an empty disposable review copy and add reset fixture."""
+    try:
+        value = prepare_review_copy(experiment_output, run_id, destination, subject_root)
+    except (ManualReviewError, PreservationError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps({**value, "serve_command": f"python3 -m http.server 8000 --directory {shlex.quote(str(destination.resolve()))}", "open_path": "/review-fixture.html", "reset": "reload /review-fixture.html before every acceptance script"}, indent=2, sort_keys=True))
+
+
+@review_app.command("prepare-blind")
+def review_prepare_blind(experiment_output: Path, blind_review_id: str, destination: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"), subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
+    """Prepare the selected opaque review ID without exposing harness metadata."""
+    selected = next((item for item in review_queue(experiment_output, experiment_definition, subject_root) if item["blind_review_id"] == blind_review_id), None)
+    if selected is None: raise typer.BadParameter("unknown blind review ID")
+    review_prepare(experiment_output, str(selected["run_id"]), destination, subject_root)
+
+
+@review_app.command("record")
+def review_record(experiment_output: Path, input_path: Path, amend: bool = typer.Option(False, "--amend"), subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
+    """Atomically save a human-authored review JSON as a new immutable revision."""
+    try:
+        raw = json.loads(input_path.read_text(encoding="utf-8"))
+        queue = review_queue(experiment_output, Path("experiments/pocket-ledger-v1.yaml"), subject_root)
+        selected = next((item for item in queue if item["blind_review_id"] == raw.get("blind_review_id")), None)
+        if selected is None: raise ManualReviewError("unknown blind review ID")
+        raw["run_id"] = selected["run_id"]
+        raw["experiment_id"] = ExperimentState.model_validate_json((experiment_output / "experiment-state.json").read_bytes()).experiment_id
+        raw["reviewed_at"] = raw.get("reviewed_at") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        raw["source_artifact_manifest_sha256"] = raw.get("source_artifact_manifest_sha256") or _sha256_path(experiment_output / "artifacts" / raw["run_id"] / "manifest.json")
+        raw["review_id"] = raw.get("review_id") or f"{raw['run_id']}-manual-review-r{raw['revision']:03d}"
+        review = ManualReview.create(**raw)
+        validate_review_against_protocol(review, subject_root)
+        path = save_review(experiment_output, review, amend=amend)
+    except (ManualReviewError, ValueError, OSError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"review_record={path}")
+
+
+@review_app.command("summary")
+def review_summary(experiment_output: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml")) -> None:
+    """Aggregate separate manual outcomes; never alters M9 execution metrics."""
+    typer.echo(json.dumps({"schema_version": "1.0.0", "aggregates": aggregate_reviews(experiment_output, experiment_definition)}, indent=2, sort_keys=True))
+
+
+@review_app.command("report")
+def review_report(experiment_output: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"), output: Path | None = typer.Option(None, "--output")) -> None:
+    """Create a separate non-overwriting M10 quality summary after human reviews."""
+    try: root = build_quality_report(experiment_output, experiment_definition, output)
+    except (ManualReviewError, OSError, ValueError) as exc: raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"quality_report={root}")
+
+
+def _sha256_path(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 @backend_app.command("validate")

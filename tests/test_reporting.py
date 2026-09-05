@@ -25,6 +25,7 @@ from agent_bench.reporting import (
     quantile_type7,
     verify_report,
     _ingest,
+    _comparative_validity,
 )
 from agent_bench.executor import ExperimentState, RunProgress
 from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
@@ -192,6 +193,35 @@ def test_failed_run_evidence_is_reported_as_verified_infrastructure_record(tmp_p
     assert rows["runs"][0]["termination_class"] == "benchmark_port_in_use"
     assert rows["failures"][0]["failure_phase"] == "preflight"
     assert rows["failures"][0]["harness_execution_started"] is False
+
+
+def test_comparative_validity_distinguishes_complete_partial_and_infrastructure() -> None:
+    def state(states: list[str]) -> ExperimentState:
+        return ExperimentState(experiment_id="fixture", definition_digest="a" * 64, expansion_digest="b" * 64,
+            ordering={}, runs=[RunProgress(run_id=f"run-{i}", execution_index=i, state=value) for i, value in enumerate(states, 1)], updated_at="2026-09-05T00:00:00Z")
+    clean = state(["completed"] * 135)
+    assert _comparative_validity(clean, [{"state": "completed", "evidence_status": "verified"} for _ in clean.runs]) == "complete_valid_for_comparative_interpretation"
+    partial = state(["completed", "pending"])
+    assert _comparative_validity(partial, [{"state": "completed", "evidence_status": "verified"}, {"state": "pending", "evidence_status": "not_executed"}]) == "partial_but_otherwise_healthy"
+    ordinary = state(["completed", "failed"])
+    assert _comparative_validity(ordinary, [{"state": "completed", "evidence_status": "verified"}, {"state": "failed", "evidence_status": "verified_failed_run_evidence", "termination_class": "harness_crash"}]) == "complete_with_ordinary_run_failures"
+    broken = state(["completed", "failed"])
+    assert _comparative_validity(broken, [{"state": "completed", "evidence_status": "verified"}, {"state": "failed", "evidence_status": "verified_failed_run_evidence", "termination_class": "benchmark_port_in_use"}]) == "invalid_for_comparative_interpretation"
+
+
+def test_report_status_explicitly_identifies_selected_report_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from agent_bench import reporting
+    state = ExperimentState(experiment_id="fixture", definition_digest="a" * 64, expansion_digest="b" * 64,
+                            ordering={}, runs=[], updated_at="2026-09-05T00:00:00Z")
+    monkeypatch.setattr(reporting, "_load_state", lambda _root: state)
+    (tmp_path / "report-v1").mkdir()
+    (tmp_path / "report-v2").mkdir()
+    default = reporting.report_status(tmp_path)
+    assert default["selected_report_source"] == "default report-v1"
+    assert default["available_report_roots"] == ["report-v1", "report-v2"]
+    explicit = reporting.report_status(tmp_path, report_root=tmp_path / "report-v2")
+    assert explicit["selected_report_source"] == "explicit --report-root"
+    assert explicit["selected_report_root"].endswith("report-v2")
 
 
 def test_real_smoke_is_reportable_read_only_when_available(tmp_path: Path) -> None:

@@ -1,0 +1,31 @@
+schema_version: 1.0.0
+review_protocol_id: pocket-ledger-functional-review-v1
+fixture:
+  storage_key: pocket-ledger.entries.v1
+  entries:
+    - {description: Salary, amount: 2000}
+    - {description: Groceries, amount: -125.5}
+    - {description: Train pass, amount: -49.5}
+common_regression_criteria:
+  - app_loads
+  - existing_entries_render
+  - adding_entry_works
+  - baseline_balance_updates
+  - no_obvious_fatal_runtime_error
+  - unrelated_functionality_intact
+tasks:
+  entry-delete:
+    requires_source_change: true
+    criteria: [delete_one_existing_entry, selected_entry_disappears, unrelated_entries_remain, balance_updates, deletion_persists_after_reload]
+  entry-filter:
+    requires_source_change: true
+    criteria: [labelled_filter_exists, case_insensitive_description_filter, visible_set_changes_only, reset_restores_entries, no_match_empty_state, entries_and_balance_unmutated]
+  entry-category:
+    requires_source_change: true
+    criteria: [selectable_category_on_entry, category_displayed_in_list, category_persists, legacy_entry_fallback_works, existing_entry_flow_works]
+  monthly-summary:
+    requires_source_change: true
+    criteria: [income_total_visible, expense_total_visible, net_visible, totals_reflect_entries, totals_update_after_change, empty_data_zero_values_valid]
+  keyboard-entry:
+    requires_source_change: true
+    criteria: [shortcut_is_documented, shortcut_focuses_description, typing_in_input_not_hijacked, ordinary_add_entry_flow_works, shortcut_has_no_unrelated_destructive_effect]

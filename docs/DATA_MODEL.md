@@ -42,7 +42,7 @@ Common conventions:
 | GitChangeSummary | Immutable derived record for one baseline/result pair and algorithm version |
 | ArtifactManifest | Appendable until preservation verification; immutable after sealing |
 | RunMetrics | Immutable output of one metric-definition/implementation version |
-| ManualReview | Append-only revision records; prior revisions immutable |
+| ManualReview | Append-only revision records; prior revisions immutable; stored separately from M9 artifacts |
 | FailedRunEvidence | Immutable after checksum sealing; existing run/failure destinations are never overwritten |
 
 Generated normalized/metrics datasets can be recomputed only into a new versioned location with new records. Raw records and preserved application artifacts are never rewritten by recomputation.

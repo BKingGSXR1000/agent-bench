@@ -42,6 +42,22 @@ until every planned row is terminal and verified. An ordinary harness exit or
 Agent Bench `success` means execution/preservation success only; it is not a
 task-correctness or manual-review result.
 
+`comparative_validity` is an execution-evidence classification:
+`complete_valid_for_comparative_interpretation` requires every planned row to
+be completed and verified; `partial_but_otherwise_healthy` identifies pending
+work without ordinary terminal failures; `partial_with_ordinary_run_failures`
+and `complete_with_ordinary_run_failures` retain non-infrastructure harness
+outcomes without silently declaring the whole experiment corrupt; and
+`invalid_for_comparative_interpretation` is reserved for invalid evidence or
+systematic infrastructure/preservation failure. None of these values claims
+functional task success; M10 review evidence is separate.
+
+`python -m agent_bench.cli report status EXPERIMENT_OUTPUT` always identifies
+the selected report root and says when that selection is the `report-v1`
+default. Use `--report-root EXPERIMENT_OUTPUT/report-v2` to inspect a different
+derived report explicitly; available report roots are listed rather than being
+silently substituted.
+
 ## Layout and schemas
 
 ```text

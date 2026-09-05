@@ -208,6 +208,8 @@ no model or harness execution was performed.
 
 ## M10 — Manual review workflow
 
+Status: completed
+
 Implement:
 - list unreviewed preserved results
 - show run identity without modifying the result
@@ -217,6 +219,14 @@ Implement:
 - compare manual scores with deterministic benchmark metrics
 
 Manual GUI/application testing itself remains human-operated.
+
+M10 implements versioned, immutable human functional acceptance records,
+canonical task criteria shared across prompt variants, a local-only blinded
+browser dashboard with isolated fixture-backed restoration and reset, deterministic
+queue ordering, and separate quality aggregations. It does not modify M9 evidence or auto-review
+the baseline dataset. Future harness-profile matrices remain a new explicitly
+planned experiment: 3 profiles per harness would expand the current 135-cell
+default-profile matrix to 405 cells while keeping model/backend fixed.
 
 ## M11 — Qualitative reasoning export
 

@@ -248,12 +248,16 @@ def verify_report(report_root: Path) -> dict[str, Any]:
     return manifest
 
 
-def report_status(experiment_output: Path) -> dict[str, Any]:
-    """Return deterministic completion status and optional report verification."""
+def report_status(experiment_output: Path, *, report_root: Path | None = None) -> dict[str, Any]:
+    """Return completion plus one explicitly selected derived report's integrity."""
     root = experiment_output.expanduser().resolve()
     state = _load_state(root)
     result = _state_counts(state)
-    report = root / REPORT_DIRECTORY
+    report = (report_root.expanduser().resolve() if report_root is not None else root / REPORT_DIRECTORY)
+    candidates = sorted(path.name for path in root.glob("report-v*") if path.is_dir())
+    result["selected_report_root"] = str(report)
+    result["selected_report_source"] = "explicit --report-root" if report_root is not None else f"default {REPORT_DIRECTORY}"
+    result["available_report_roots"] = candidates
     result["report"] = "missing"
     if report.exists():
         try:
@@ -877,13 +881,14 @@ def _build_database(path: Path, parquet_root: Path) -> None:
 
 def _summary(state: ExperimentState, runs: list[dict[str, Any]], summaries: list[dict[str, Any]], excluded: list[dict[str, str]], environment: dict[str, str | None]) -> dict[str, Any]:
     counts = _state_counts(state)
+    comparative_validity = _comparative_validity(state, runs)
     return {"schema_version": REPORT_SCHEMA_VERSION, "generator": {"name": REPORT_GENERATOR, "version": REPORT_GENERATOR_VERSION, "agent_bench_version": __version__},
             "experiment_id": state.experiment_id, "definition_digest": state.definition_digest, "expansion_digest": state.expansion_digest,
             "fixed_environment": environment,
             "completion": {**counts, "is_partial": counts["completed"] != counts["total"], "label": f"PARTIAL EXPERIMENT — {counts['completed']} / {counts['total']} completed" if counts["completed"] != counts["total"] else "COMPLETE EXPERIMENT"},
             "included_verified_run_ids": [item["run_id"] for item in runs if item["evidence_status"] == "verified"], "excluded_or_invalid_runs": excluded,
             "summary_row_count": len(summaries), "quality_notice": "Execution success is not task-quality or manual-review proof.",
-            "comparative_validity": "invalid_for_comparative_interpretation" if counts["failed"] or counts["interrupted"] or counts["invalid"] else "partial_but_no_terminal_infrastructure_failure"}
+            "comparative_validity": comparative_validity}
 
 
 def _archival_manifest(state: ExperimentState, artifacts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -944,7 +949,7 @@ def _presentation(
         "definition_digest": state.definition_digest,
         "expansion_digest": state.expansion_digest,
         "completion": {**counts, "is_partial": counts["completed"] != counts["total"]},
-        "comparative_validity": "invalid_for_comparative_interpretation" if counts["failed"] or counts["interrupted"] or counts["invalid"] else "partial_but_no_terminal_infrastructure_failure",
+        "comparative_validity": _comparative_validity(state, rows["runs"]),
         "summary_environment": summary_environment,
         "definition": definition_presentation,
         "runs": rows["runs"],
@@ -1101,6 +1106,38 @@ def _seal_report(root: Path, state: ExperimentState, rows: dict[str, list[dict[s
 def _state_counts(state: ExperimentState) -> dict[str, int]:
     counts = Counter(item.state for item in state.runs)
     return {"total": len(state.runs), **{key: counts.get(key, 0) for key in ("completed", "failed", "interrupted", "invalid", "pending", "preflight", "running", "preserving", "analyzing")}}
+
+
+def _comparative_validity(state: ExperimentState, runs: list[dict[str, Any]]) -> str:
+    """Classify execution-evidence comparability, never task correctness."""
+    counts = _state_counts(state)
+    infrastructure_classes = {
+        "benchmark_port_in_use", "conflicting_gpu_process", "precondition_failed",
+        "backend_identity_mismatch", "model_hash_mismatch", "template_hash_mismatch",
+        "backend_start_failed", "backend_readiness_failed", "preservation_failed",
+    }
+    systematic_infrastructure = any(
+        row.get("failure_domain") in {"infrastructure_precondition", "backend_lifecycle", "proxy_lifecycle", "preservation"}
+        or row.get("failure_class") in infrastructure_classes
+        or row.get("termination_class") in infrastructure_classes
+        for row in runs
+    )
+    invalid_evidence = any(row.get("evidence_status") == "invalid" for row in runs)
+    unfinished = any(counts[key] for key in ("pending", "preflight", "running", "preserving", "analyzing"))
+    ordinary_failure = bool(counts["failed"] or counts["interrupted"] or counts["invalid"])
+    verified_completed = sum(
+        row.get("state") == "completed" and row.get("evidence_status") == "verified"
+        for row in runs
+    )
+    if systematic_infrastructure or invalid_evidence:
+        return "invalid_for_comparative_interpretation"
+    if not unfinished and not ordinary_failure and verified_completed == counts["total"]:
+        return "complete_valid_for_comparative_interpretation"
+    if unfinished and not ordinary_failure:
+        return "partial_but_otherwise_healthy"
+    if unfinished:
+        return "partial_with_ordinary_run_failures"
+    return "complete_with_ordinary_run_failures"
 
 
 def _read_checksums(path: Path) -> dict[str, str]:
