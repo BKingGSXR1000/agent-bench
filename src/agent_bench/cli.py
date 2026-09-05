@@ -522,7 +522,7 @@ def report_reasoning_screen(
 def report_compare(
     experiment_roots: list[Path],
     output: Path = typer.Option(..., "--output", help="New derived comparison directory."),
-    experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="One immutable definition per root, in the same order."),
+    experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="Read-only immutable definition mapping: one YAML per root, in the same order."),
     reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient pairs as candidate minus this reference profile."),
     all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
 ) -> None:

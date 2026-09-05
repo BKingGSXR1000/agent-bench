@@ -1,0 +1,36 @@
+{
+  "experiment_id": "legacy-pocket-ledger-v1",
+  "definition_digest": "legacy-definition-digest",
+  "definition": {
+    "portable_baseline": {
+      "baseline_commit": "0123456789abcdef"
+    },
+    "fixed_environment": {
+      "fixed_environment_id": "legacy-qwen38",
+      "model": {
+        "definition_digest": "model-digest",
+        "gguf_metadata": {
+          "chat_template_sha256": "template-digest"
+        }
+      },
+      "backend": {
+        "definition_digest": "backend-digest",
+        "build_metadata": {}
+      },
+      "hardware": {
+        "definition_digest": "hardware-digest"
+      },
+      "server_parameters": {
+        "ctx_size": 32768
+      },
+      "generation": {
+        "schema_version": "1.0.0",
+        "seed": 1001
+      }
+    },
+    "prompts": [],
+    "profiles": [],
+    "harnesses": []
+  },
+  "runs": []
+}

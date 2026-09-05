@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from agent_bench.config import ExperimentConfigError, load_experiment
+from agent_bench.context_storage import verify_context_analysis_artifact
 from agent_bench.executor import ExperimentState
 from agent_bench.matrix import expand_experiment
 from agent_bench.metrics import calculate_run_metrics
 from agent_bench.metrics_storage import verify_metrics_artifact
 from agent_bench.models import canonical_sha256
 from agent_bench.preservation import verify_artifact
-from agent_bench.reporting import quantile_type7
+from agent_bench.reporting import ReportError, quantile_type7, verify_report
 from agent_bench.result_store import verify_published_result
 from agent_bench.runner import RunManifest
 
@@ -58,9 +59,11 @@ def build_comparison(
 ) -> Path:
     """Build a sealed derived comparison without modifying source roots.
 
-    Definitions provide semantic-task and fixed-environment identity.  They
-    are discovered conventionally when possible, otherwise callers must pass
-    one definition per root; guessing those identities is unsafe.
+    Definitions provide semantic-task and fixed-environment identity. They are
+    discovered by exact immutable identity (not filename) when possible. A
+    caller can instead supply a read-only checked-in mapping per root. For
+    older roots, verified sealed report presentation is the final fallback;
+    missing identity is never guessed.
     """
     if len(roots) < 2:
         raise ComparisonError("at least two experiment roots are required")
@@ -77,6 +80,13 @@ def build_comparison(
         for index, root in enumerate(sources)
     ]
     compatibility = _compatibility(inputs)
+    unavailable = [item["dimension"] for item in compatibility if item["status"] == "unavailable"]
+    if unavailable:
+        raise ComparisonError(
+            "compatibility identity is unavailable in sealed evidence: "
+            + ", ".join(unavailable)
+            + "; supply --experiment-definition once per root"
+        )
     incompatible = [item["dimension"] for item in compatibility if item["status"] == "incompatible"]
     if incompatible:
         raise ComparisonError("incompatible evidence: " + ", ".join(incompatible))
@@ -131,18 +141,46 @@ def _read_root(root: Path, explicit_definition: Path | None) -> dict[str, Any]:
         state = ExperimentState.model_validate_json((root / "experiment-state.json").read_bytes())
     except Exception as exc:
         raise ComparisonError(f"invalid experiment state at {root}: {exc}") from exc
-    definition_path = explicit_definition
-    if definition_path is None:
-        candidate = Path.cwd() / "experiments" / f"{state.experiment_id}.yaml"
-        definition_path = candidate if candidate.is_file() else None
-    if definition_path is None:
-        raise ComparisonError(f"no immutable experiment definition available for {state.experiment_id}")
-    try:
-        definition = load_experiment(definition_path)
-    except ExperimentConfigError as exc:
-        raise ComparisonError(f"invalid experiment definition for {root}: {exc}") from exc
-    if definition.experiment_id != state.experiment_id or definition.definition_digest != state.definition_digest:
-        raise ComparisonError(f"experiment definition does not match immutable state for {root}")
+    definition = _resolve_definition(state, explicit_definition)
+    if definition is None:
+        legacy = _legacy_report_presentation(root, state)
+        if legacy is None:
+            raise ComparisonError(
+                f"no immutable experiment definition or verified historical report is available for {state.experiment_id}; "
+                "supply --experiment-definition once per root"
+            )
+        return _read_legacy_root(root, state, legacy)
+    return _read_definition_root(root, state, definition)
+
+
+def _resolve_definition(state: ExperimentState, explicit: Path | None) -> Any | None:
+    """Find an exact checked-in definition without treating its filename as identity."""
+    candidates = [explicit] if explicit is not None else [
+        Path.cwd() / "experiments" / f"{state.experiment_id}.yaml",
+        *sorted((Path.cwd() / "experiments").glob("*.yaml")),
+    ]
+    matches: list[Any] = []
+    for candidate in candidates:
+        if candidate is None or not candidate.is_file():
+            continue
+        try:
+            definition = load_experiment(candidate)
+        except ExperimentConfigError as exc:
+            if explicit is not None:
+                raise ComparisonError(f"invalid experiment definition: {exc}") from exc
+            continue
+        if definition.experiment_id == state.experiment_id and definition.definition_digest == state.definition_digest:
+            matches.append(definition)
+    if explicit is not None and not matches:
+        raise ComparisonError("supplied experiment definition does not match immutable experiment state")
+    if len(matches) > 1:
+        # Identical semantic definitions are harmless; the first deterministic
+        # candidate is enough and no identity is inferred from its path.
+        return matches[0]
+    return matches[0] if matches else None
+
+
+def _read_definition_root(root: Path, state: ExperimentState, definition: Any) -> dict[str, Any]:
     planned = {item.run_id: item for item in expand_experiment(definition)}
     profiles = {item.profile_id: item for item in definition.harness_profiles}
     harnesses = {item.harness_id: item for item in definition.harnesses}
@@ -159,6 +197,8 @@ def _read_root(root: Path, explicit_definition: Path | None) -> dict[str, Any]:
         if manifest.run_id != run.run_id or manifest.prompt_sha256 != run.prompt_sha256:
             raise ComparisonError(f"sealed run identity disagrees with definition: {run.run_id}")
         stored = verify_metrics_artifact(root / "analysis" / run.run_id / "metrics-v1")
+        context = verify_context_analysis_artifact(root / "analysis" / run.run_id / "context-analysis-v2")
+        _verify_analysis_links(artifact, stored, context, run.run_id)
         values, provenance = _metric_values(stored.metrics, artifact)
         rows.append({
             "experiment_id": state.experiment_id, "run_id": run.run_id,
@@ -178,11 +218,144 @@ def _read_root(root: Path, explicit_definition: Path | None) -> dict[str, Any]:
         "identity": {
             "subject_baseline": fixed.fixed_environment_id + ":" + (definition.portable_baseline.baseline_commit if definition.portable_baseline else definition.baseline_revision),
             "model": fixed.model.definition_digest, "backend": fixed.backend.definition_digest,
-            "chat_template": str(fixed.model.gguf_metadata.get("chat_template_sha256") or fixed.backend.build_metadata.get("template_sha256") or "unavailable"),
+            "chat_template": _string(fixed.model.gguf_metadata.get("chat_template_sha256") or fixed.backend.build_metadata.get("template_sha256")),
             "hardware": fixed.hardware.definition_digest,
             "context_backend_settings": canonical_sha256({"server": fixed.server_parameters, "generation": {key: value for key, value in fixed.generation.model_dump(mode="json", exclude={"definition_digest"}).items() if key != "seed"}}),
-        }, "rows": rows,
+        },
+        "identity_provenance": {name: "external_immutable_definition" for name in _IDENTITY_DIMENSIONS},
+        "rows": rows,
     }
+
+
+_IDENTITY_DIMENSIONS = (
+    "subject_baseline", "model", "backend", "chat_template", "hardware",
+    "context_backend_settings",
+)
+
+
+def _legacy_report_presentation(root: Path, state: ExperimentState) -> dict[str, Any] | None:
+    """Read an already sealed derived report; never create data in the old root."""
+    for name in ("report-v2", "report-v1"):
+        report_root = root / name
+        if not report_root.is_dir():
+            continue
+        try:
+            manifest = verify_report(report_root)
+            presentation = json.loads((report_root / "presentation.json").read_text(encoding="utf-8"))
+        except (ReportError, OSError, json.JSONDecodeError):
+            continue
+        if (
+            manifest.get("experiment_id") == state.experiment_id
+            and manifest.get("definition_digest") == state.definition_digest
+            and presentation.get("experiment_id") == state.experiment_id
+            and presentation.get("definition_digest") == state.definition_digest
+        ):
+            return presentation
+    return None
+
+
+def _read_legacy_root(root: Path, state: ExperimentState, presentation: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruct comparison facts from a verified historic derived report.
+
+    The report supplies only structured labels/identity values.  Every raw run,
+    result ref, and metrics artifact is still verified below before inclusion.
+    """
+    definition = presentation.get("definition")
+    if not isinstance(definition, dict):
+        raise ComparisonError("verified historical report lacks definition presentation")
+    runs = {item.get("run_id"): item for item in presentation.get("runs", []) if isinstance(item, dict) and isinstance(item.get("run_id"), str)}
+    prompts = {item.get("prompt_id"): item for item in definition.get("prompts", []) if isinstance(item, dict) and isinstance(item.get("prompt_id"), str)}
+    profiles = {item.get("profile_id"): item for item in definition.get("profiles", []) if isinstance(item, dict) and isinstance(item.get("profile_id"), str)}
+    harnesses = {item.get("harness_id"): item for item in definition.get("harnesses", []) if isinstance(item, dict) and isinstance(item.get("harness_id"), str)}
+    completed = [progress for progress in state.runs if progress.state == "completed"]
+    rows: list[dict[str, Any]] = []
+    for progress in completed:
+        planned = runs.get(progress.run_id)
+        if planned is None:
+            raise ComparisonError(f"verified historical report lacks completed run metadata: {progress.run_id}")
+        artifact = root / "artifacts" / progress.run_id
+        sealed = verify_artifact(artifact)
+        verify_published_result(root, sealed)
+        manifest = RunManifest.model_validate_json((artifact / "run" / "manifest.json").read_bytes())
+        prompt_id = planned.get("prompt_id")
+        prompt = prompts.get(prompt_id)
+        profile_id = planned.get("harness_profile")
+        profile = profiles.get(profile_id)
+        harness_id = planned.get("harness")
+        harness = harnesses.get(harness_id)
+        if not all(isinstance(value, dict) for value in (prompt, profile, harness)):
+            raise ComparisonError(f"verified historical report lacks structured metadata for {progress.run_id}")
+        assert isinstance(prompt, dict) and isinstance(profile, dict) and isinstance(harness, dict)
+        if manifest.run_id != progress.run_id or manifest.prompt_id != prompt_id or manifest.prompt_sha256 != prompt.get("sha256"):
+            raise ComparisonError(f"sealed run identity disagrees with historical report: {progress.run_id}")
+        reported_seed = planned.get("seed")
+        if reported_seed is not None and manifest.run_seed != reported_seed:
+            raise ComparisonError(f"sealed run seed disagrees with historical report: {progress.run_id}")
+        stored = verify_metrics_artifact(root / "analysis" / progress.run_id / "metrics-v1")
+        context = verify_context_analysis_artifact(root / "analysis" / progress.run_id / "context-analysis-v2")
+        _verify_analysis_links(artifact, stored, context, progress.run_id)
+        values, provenance = _metric_values(stored.metrics, artifact)
+        settings = profile.get("settings") if isinstance(profile.get("settings"), dict) else {}
+        rows.append({
+            "experiment_id": state.experiment_id, "run_id": progress.run_id,
+            "harness": harness_id, "profile": profile_id,
+            "harness_version": harness.get("version") or "unavailable",
+            "reasoning_setting": _reasoning_setting(settings),
+            "semantic_task": prompt.get("semantic_task_id"), "prompt_id": prompt_id,
+            "prompt_sha256": prompt.get("sha256"), "prompt_variant": prompt.get("variant_label"),
+            "repetition": planned.get("repetition"), "seed": manifest.run_seed,
+            "metrics": values, "metric_provenance": provenance,
+        })
+    identity = _legacy_identity(definition)
+    return {
+        "experiment_id": state.experiment_id, "root": str(root),
+        "definition_digest": state.definition_digest, "completed_runs": len(rows),
+        "partial": any(progress.state not in {"completed", "failed", "invalid"} for progress in state.runs),
+        "identity": identity,
+        "identity_provenance": {name: "verified_historical_report_presentation" for name in _IDENTITY_DIMENSIONS},
+        "rows": rows,
+    }
+
+
+def _legacy_identity(definition: dict[str, Any]) -> dict[str, str | None]:
+    fixed = definition.get("fixed_environment")
+    baseline = definition.get("portable_baseline")
+    if not isinstance(fixed, dict) or not isinstance(baseline, dict):
+        return {name: None for name in _IDENTITY_DIMENSIONS}
+    model, backend, hardware = fixed.get("model"), fixed.get("backend"), fixed.get("hardware")
+    generation = fixed.get("generation")
+    if not all(isinstance(value, dict) for value in (model, backend, hardware, generation)):
+        return {name: None for name in _IDENTITY_DIMENSIONS}
+    assert isinstance(model, dict) and isinstance(backend, dict) and isinstance(hardware, dict) and isinstance(generation, dict)
+    generation = {key: value for key, value in generation.items() if key not in {"seed", "definition_digest"}}
+    return {
+        "subject_baseline": _joined(fixed.get("fixed_environment_id"), baseline.get("baseline_commit")),
+        "model": _string(model.get("definition_digest")),
+        "backend": _string(backend.get("definition_digest")),
+        "chat_template": _string((model.get("gguf_metadata") or {}).get("chat_template_sha256") or (backend.get("build_metadata") or {}).get("template_sha256")),
+        "hardware": _string(hardware.get("definition_digest")),
+        "context_backend_settings": canonical_sha256({"server": fixed.get("server_parameters"), "generation": generation}),
+    }
+
+
+def _string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _joined(first: object, second: object) -> str | None:
+    return f"{first}:{second}" if isinstance(first, str) and first and isinstance(second, str) and second else None
+
+
+def _verify_analysis_links(artifact: Path, stored: Any, context: Any, run_id: str) -> None:
+    """Require metrics and context provenance to identify this exact raw artifact."""
+    artifact_sha = hashlib.sha256((artifact / "manifest.json").read_bytes()).hexdigest()
+    if (
+        stored.manifest.run_id != run_id
+        or stored.manifest.source_artifact_manifest_sha256 != artifact_sha
+        or context.run_id != run_id
+        or context.source_artifact_manifest_sha256 != artifact_sha
+    ):
+        raise ComparisonError(f"analysis provenance does not link to sealed run artifact: {run_id}")
 
 
 def _metric_values(metrics: Any, artifact: Path) -> tuple[dict[str, float | int | None], dict[str, str]]:
@@ -221,9 +394,23 @@ def _reasoning_setting(settings: dict[str, Any]) -> str:
 
 def _compatibility(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for dimension in ("subject_baseline", "model", "backend", "chat_template", "hardware", "context_backend_settings"):
-        values = {item["identity"][dimension] for item in inputs}
-        result.append({"dimension": dimension, "values": sorted(values), "status": "compatible" if len(values) == 1 else "incompatible"})
+    for dimension in _IDENTITY_DIMENSIONS:
+        values = [item["identity"].get(dimension) for item in inputs]
+        missing_roots = [item["root"] for item, value in zip(inputs, values, strict=True) if value is None]
+        if missing_roots:
+            result.append({
+                "dimension": dimension,
+                "values": sorted({value for value in values if value is not None}),
+                "missing_from_roots": missing_roots,
+                "status": "unavailable",
+            })
+            continue
+        unique_values = sorted(set(values))
+        result.append({
+            "dimension": dimension,
+            "values": unique_values,
+            "status": "compatible" if len(unique_values) == 1 else "incompatible",
+        })
     harnesses = sorted({row["harness"] + ":" + row["harness_version"] for item in inputs for row in item["rows"]})
     result.append({"dimension": "harness_identity", "values": harnesses, "status": "stratified"})
     return result

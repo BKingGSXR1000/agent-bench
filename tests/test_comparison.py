@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
-from agent_bench.comparison import ComparisonError, _pairs, _summaries, build_comparison
+from agent_bench.comparison import ComparisonError, _compatibility, _pairs, _summaries, build_comparison
 from agent_bench.reasoning_template import verify_reasoning_template
 
 
@@ -122,3 +126,77 @@ def test_incompatible_roots_are_rejected_without_output(monkeypatch: pytest.Monk
     with pytest.raises(ComparisonError, match="model"):
         build_comparison([tmp_path / "one", tmp_path / "two"], output=tmp_path / "derived")
     assert not (tmp_path / "derived").exists()
+
+
+def test_legacy_root_without_embedded_definition_uses_verified_report_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A pre-embedded-definition root is read, never backfilled or modified."""
+    from agent_bench import comparison
+
+    fixture = Path(__file__).parent / "fixtures" / "legacy-experiment-root"
+    root = tmp_path / "legacy-root"
+    root.mkdir()
+    (root / "experiment-state.json").write_bytes((fixture / "experiment-state.json").read_bytes())
+    report = root / "report-v1"
+    report.mkdir()
+    (report / "presentation.json").write_bytes((fixture / "report-v1" / "presentation.json").read_bytes())
+    presentation = json.loads((report / "presentation.json").read_text(encoding="utf-8"))
+    state = json.loads((root / "experiment-state.json").read_text(encoding="utf-8"))
+    monkeypatch.chdir(tmp_path)  # There is intentionally no checked-in mapping here.
+    monkeypatch.setattr(
+        comparison, "verify_report",
+        lambda _report: {"experiment_id": state["experiment_id"], "definition_digest": state["definition_digest"]},
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        comparison, "_read_legacy_root",
+        lambda seen_root, seen_state, seen_presentation: captured.update(
+            root=seen_root, state=seen_state, presentation=seen_presentation,
+        ) or {"legacy": True},
+    )
+
+    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert comparison._read_root(root, None) == {"legacy": True}
+    assert captured["root"] == root
+    assert captured["presentation"] == presentation
+    assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
+    assert not (root / "definition.yaml").exists()
+
+
+def test_definition_discovery_matches_immutable_identity_not_legacy_root_filename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from agent_bench import comparison
+    from agent_bench.executor import ExperimentState
+
+    state = ExperimentState.model_validate({
+        "experiment_id": "pocket-ledger-v1-qwen38", "definition_digest": "expected",
+        "expansion_digest": "expansion", "ordering": {}, "runs": [],
+        "updated_at": "2026-01-01T00:00:00Z",
+    })
+    experiments = tmp_path / "experiments"
+    experiments.mkdir()
+    legacy_named_yaml = experiments / "pocket-ledger-v1.yaml"
+    legacy_named_yaml.write_text("fixture: ignored by mocked loader\n", encoding="utf-8")
+    resolved = SimpleNamespace(experiment_id="pocket-ledger-v1-qwen38", definition_digest="expected")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(comparison, "load_experiment", lambda path: resolved if path == legacy_named_yaml else pytest.fail(str(path)))
+
+    assert comparison._resolve_definition(state, None) is resolved
+
+
+def test_unavailable_identity_is_reported_not_assumed_compatible() -> None:
+    identity = {
+        "subject_baseline": "subject", "model": "model", "backend": "backend",
+        "chat_template": "template", "hardware": "hardware", "context_backend_settings": "settings",
+    }
+    report = _compatibility([
+        {"root": "old", "identity": {**identity, "hardware": None}, "rows": []},
+        {"root": "new", "identity": identity, "rows": []},
+    ])
+    hardware = next(item for item in report if item["dimension"] == "hardware")
+    assert hardware == {
+        "dimension": "hardware", "values": ["hardware"],
+        "missing_from_roots": ["old"], "status": "unavailable",
+    }
