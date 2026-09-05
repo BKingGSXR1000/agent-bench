@@ -181,7 +181,7 @@ def calculate_run_metrics(
     )
     reasoning = _calculate_reasoning_metrics(
         events, tokens.reasoning_tokens_total, tokens.reasoning_tokens_before_first_edit,
-        reasoning_tokenizer=reasoning_tokenizer,
+        reasoning_tokenizer=reasoning_tokenizer, raw_events=raw_events,
     )
     # Explicit captured reasoning text takes precedence over a conflicting
     # zero-valued usage counter.  A zero counter is not evidence of zero
@@ -1259,6 +1259,7 @@ def _calculate_reasoning_metrics(
     usage_before_edit: ScalarMetric,
     *,
     reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    raw_events: tuple[RawEvent, ...] = (),
 ) -> ReasoningMetrics:
     """Calculate captured-thinking metrics without character/token conflation.
 
@@ -1268,7 +1269,7 @@ def _calculate_reasoning_metrics(
     unless an exact native non-zero aggregate is already present; no character
     count is ever promoted to a token count.
     """
-    blocks = extract_reasoning_blocks(events)
+    blocks = extract_reasoning_blocks(events, raw_events=raw_events)
     evidence = tuple(block.event_id for block in blocks)
     if not blocks:
         unavailable_chars = _unavailable("characters", "source_not_exposed")
@@ -1326,8 +1327,25 @@ def _calculate_reasoning_metrics(
     durations = [block.duration_seconds for block in blocks]
     if all(duration is not None for duration in durations):
         exact = [float(duration) for duration in durations if duration is not None]
-        time_total = _available(sum(exact), "seconds", "deterministically_calculated", events=evidence, source_methods=("exact_native",))
-        max_time = _available(max(exact), "seconds", "deterministically_calculated", events=evidence, source_methods=("exact_native",))
+        timing_evidence = tuple(
+            source_id for block in blocks for source_id in block.source_event_ids
+        )
+        timing_artifacts = tuple(sorted({
+            path for block in blocks for path in block.source_artifact_paths
+        }))
+        timing_methods = tuple(sorted({
+            block.timing_provenance for block in blocks
+        }))
+        time_total = _available(
+            sum(exact), "seconds", "deterministically_calculated",
+            events=timing_evidence, artifacts=timing_artifacts,
+            source_methods=timing_methods,
+        )
+        max_time = _available(
+            max(exact), "seconds", "deterministically_calculated",
+            events=timing_evidence, artifacts=timing_artifacts,
+            source_methods=timing_methods,
+        )
     else:
         time_total = _unavailable("seconds", "source_not_exposed", events=evidence)
         max_time = _unavailable("seconds", "source_not_exposed", events=evidence)
