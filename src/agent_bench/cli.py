@@ -80,7 +80,7 @@ from agent_bench.executor import (
 from agent_bench.subject import SubjectError, load_frozen_subject
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
-from agent_bench.reporting import ReportError, build_report, export_public, report_status, verify_report
+from agent_bench.reporting import ReportError, build_report, build_unified_report, export_public, report_status, verify_report
 from agent_bench.reasoning_screen import ReasoningScreenError, build_reasoning_screen_comparison
 from agent_bench.comparison import ComparisonError, build_comparison
 from agent_bench.reasoning_template import ReasoningTemplateError, verify_reasoning_template
@@ -538,6 +538,27 @@ def report_compare(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"comparison={root}\nstatus=sealed")
+
+
+@report_app.command("combine")
+def report_combine(
+    experiment_roots: list[Path],
+    output: Path = typer.Option(..., "--output", help="New unified full-report directory."),
+    experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="Read-only immutable definition mapping: one YAML per root, in the same order."),
+    reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient matched pairs as candidate minus this reference profile."),
+    all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
+) -> None:
+    """Build one rich offline report from multiple compatible experiment roots."""
+    try:
+        report = build_unified_report(
+            experiment_roots, output=output,
+            experiment_definitions=experiment_definition or None,
+            reference_profile=reference_profile, include_all_pairs=all_pairs,
+        )
+    except (ReportError, ComparisonError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"report={report.root}\nstatus=sealed\nincluded_runs={len(report.manifest['included_run_ids'])}")
 
 
 @review_app.command("status")

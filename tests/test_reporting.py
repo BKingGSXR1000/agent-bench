@@ -27,6 +27,7 @@ from agent_bench.reporting import (
     _ingest,
     _comparative_validity,
     concise_chart_series_labels,
+    build_unified_report,
 )
 from agent_bench.executor import ExperimentState, RunProgress
 from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
@@ -219,6 +220,44 @@ def test_comparison_dashboard_emits_offline_numeric_sorting_for_current_group_ro
     assert "tableSorts[id]" in output and "applyTableSort(table,saved.key,saved.direction)" in output
     assert "data-sort-indicator" in output and "'↑':'↓'" in output
     assert "<script src=" not in output and "cdn" not in output.lower()
+
+
+def test_unified_report_combines_verified_roots_into_one_sealed_rich_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The combine path reuses the full M9C artifact layout, not a mini report."""
+    from agent_bench import comparison, reporting
+
+    roots = [tmp_path / "old", tmp_path / "screen"]
+    for root in roots:
+        root.mkdir()
+    states = iter([
+        ExperimentState(experiment_id="old", definition_digest="a" * 64, expansion_digest="b" * 64, ordering={}, runs=[], updated_at="2026-01-01T00:00:00Z"),
+        ExperimentState(experiment_id="screen", definition_digest="c" * 64, expansion_digest="d" * 64, ordering={}, runs=[], updated_at="2026-01-01T00:00:00Z"),
+    ])
+    identity = {"subject_baseline": "subject", "model": "model", "backend": "backend", "chat_template": "template", "hardware": "hardware", "context_backend_settings": "settings"}
+    comparison_inputs = iter([
+        {"experiment_id": "old", "root": str(roots[0]), "definition_digest": "a" * 64, "completed_runs": 0, "partial": False, "identity": identity, "rows": []},
+        {"experiment_id": "screen", "root": str(roots[1]), "definition_digest": "c" * 64, "completed_runs": 0, "partial": True, "identity": identity, "rows": []},
+    ])
+    presentation_definition = {
+        "definition_available": True, "definition_digest": "fixture", "prompts": [], "profiles": [], "harnesses": [],
+        "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}, "repetition_indices": [],
+    }
+    monkeypatch.setattr(reporting, "_load_state", lambda _root: next(states))
+    monkeypatch.setattr(reporting, "_load_definition", lambda *_args: ({"fixture": object()}, {"fixed_environment_id": "fixture", "model": "model", "model_sha256": "sha", "backend": "backend", "backend_commit": "commit", "hardware_name": "hardware", "gpu_model": "gpu"}, presentation_definition))
+    monkeypatch.setattr(reporting, "_ingest", lambda *_args: ({name: [] for name in SCHEMAS}, []))
+    monkeypatch.setattr(comparison, "_read_root", lambda *_args: next(comparison_inputs))
+
+    report = build_unified_report(roots, output=tmp_path / "unified")
+    manifest = verify_report(report.root)
+    assert manifest["included_run_ids"] == []
+    assert (report.root / "report.html").is_file()
+    assert (report.root / "comparison.json").is_file()
+    assert (report.root / "parquet" / "runs.parquet").is_file()
+    presentation = json.loads((report.root / "presentation.json").read_text(encoding="utf-8"))
+    assert [item["experiment_id"] for item in presentation["source_experiments"]] == ["old", "screen"]
+    assert "Matched seed / paired profile effects" in (report.root / "report.html").read_text(encoding="utf-8")
 
 
 def test_chart_html_uses_concise_legend_labels_and_offline_series_interaction() -> None:

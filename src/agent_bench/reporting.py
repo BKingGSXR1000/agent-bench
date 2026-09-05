@@ -226,6 +226,137 @@ def build_report(
     return ReportBuild(root=target, manifest=manifest)
 
 
+def build_unified_report(
+    experiment_outputs: list[Path], *, output: Path,
+    experiment_definitions: list[Path] | None = None,
+    reference_profile: str | None = None, include_all_pairs: bool = False,
+) -> ReportBuild:
+    """Build one rich, sealed report from compatible immutable experiment roots.
+
+    Source roots are read only.  Their M9C layers are independently verified
+    before their analytical rows are combined; no source report is required.
+    """
+    if len(experiment_outputs) < 2:
+        raise ReportError("a unified report requires at least two experiment roots")
+    if experiment_definitions is not None and len(experiment_definitions) != len(experiment_outputs):
+        raise ReportError("--experiment-definition must be supplied once per root")
+    sources = [root.expanduser().resolve() for root in experiment_outputs]
+    if len(set(sources)) != len(sources):
+        raise ReportError("experiment roots must be distinct")
+    target = output.expanduser().resolve()
+    if target.exists():
+        raise ReportError(f"report destination already exists: {target}")
+
+    # Comparison's reader has the strict historical-evidence compatibility
+    # checks, including report-v1 fallback for roots that predate embedded YAML.
+    from agent_bench.comparison import _compatibility, _pairs, _read_root, _summaries
+
+    comparison_inputs = [
+        _read_root(root, experiment_definitions[index] if experiment_definitions else None)
+        for index, root in enumerate(sources)
+    ]
+    compatibility = _compatibility(comparison_inputs)
+    blocked = [item["dimension"] for item in compatibility if item["status"] in {"incompatible", "unavailable"}]
+    if blocked:
+        raise ReportError("incompatible or unavailable unified-report identity: " + ", ".join(blocked))
+    comparison_rows = [row for item in comparison_inputs for row in item["rows"]]
+    pairs = _pairs(comparison_rows, reference_profile=reference_profile, include_all_pairs=include_all_pairs)
+    comparison_payload = {
+        "schema_version": "1.0.0", "kind": "agent-bench-matched-comparison-v1",
+        "interpretation": (
+            "Matched deltas are deterministic efficiency/behavior observations, not quality or overall agent-performance wins. "
+            "Prompt variants are strata and are not directly efficiency-comparable unless functional equivalence has been established. "
+            "Pocket Ledger is a controlled microbenchmark and should not be interpreted as a complete measure of coding-agent capability."
+        ),
+        "sources": [{key: value for key, value in item.items() if key != "rows"} for item in comparison_inputs],
+        "compatibility": compatibility, "reference_profile": reference_profile,
+        "all_pairs_included": include_all_pairs or reference_profile is None,
+        "raw_runs": comparison_rows, "matched_seed_comparisons": pairs,
+        "aggregated_paired_effects": _summaries(pairs),
+    }
+
+    all_rows = {name: [] for name in SCHEMAS}
+    excluded: list[dict[str, str]] = []
+    source_by_run: dict[str, Path] = {}
+    state_runs = []
+    definition_presentations: list[dict[str, Any]] = []
+    environments: list[dict[str, str | None]] = []
+    source_states: list[ExperimentState] = []
+    for index, (source, input_data) in enumerate(zip(sources, comparison_inputs, strict=True)):
+        state = _load_state(source)
+        definitions, environment, definition_presentation = _load_definition(
+            state, experiment_definitions[index] if experiment_definitions else None,
+        )
+        if not definitions:
+            raise ReportError(
+                f"full rich ingestion needs an immutable definition for {state.experiment_id}; "
+                "supply --experiment-definition once per root"
+            )
+        partial_rows, partial_excluded = _ingest(source, state, definitions, environment)
+        for name, values in partial_rows.items():
+            if name in {"summaries", "curves"}:
+                continue
+            all_rows[name].extend(values)
+        excluded.extend({"run_id": f"{state.experiment_id}:{item['run_id']}", "reason": item["reason"]} for item in partial_excluded)
+        for progress in state.runs:
+            state_runs.append(progress.model_copy(update={"execution_index": len(state_runs) + 1}))
+        for run_id in (row["run_id"] for row in partial_rows["runs"]):
+            if run_id in source_by_run:
+                raise ReportError(f"duplicate run ID across experiment roots: {run_id}")
+            source_by_run[run_id] = source
+        definition_presentations.append(definition_presentation)
+        environments.append(environment)
+        source_states.append(state)
+
+    identity = canonical_sha256([
+        {"experiment_id": state.experiment_id, "definition_digest": state.definition_digest,
+         "expansion_digest": state.expansion_digest}
+        for state in source_states
+    ])
+    unified_state = ExperimentState(
+        experiment_id=f"unified-{identity[:16]}", definition_digest=identity,
+        expansion_digest=canonical_sha256([run.model_dump(mode="json") for run in state_runs]),
+        ordering={"mode": "source-root-order", "source_roots": [str(root) for root in sources]},
+        runs=state_runs, updated_at="1970-01-01T00:00:00Z",
+    )
+    _append_summaries(unified_state.experiment_id, all_rows["runs"], all_rows["summaries"])
+    _append_curves(unified_state.experiment_id, all_rows["runs"], all_rows["context_points"], all_rows["curves"])
+    combined_definition = _combined_definition_presentation(definition_presentations, sources)
+    environment = environments[0]
+    presentation = _presentation(
+        sources[0], unified_state, all_rows, summary_environment=environment,
+        definition_presentation=combined_definition, source_by_run=source_by_run,
+    )
+    presentation["source_experiments"] = [
+        {"experiment_id": state.experiment_id, "definition_digest": state.definition_digest,
+         "root_name": source.name, "completed_runs": item["completed_runs"], "partial": item["partial"]}
+        for source, state, item in zip(sources, source_states, comparison_inputs, strict=True)
+    ]
+    presentation["matched_comparison"] = comparison_payload
+    presentation["data_files"].insert(1, "comparison.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".unified-report-v1.incomplete-", dir=target.parent))
+    try:
+        _write_parquet(staging / PARQUET_DIRECTORY, all_rows)
+        _build_database(staging / DATABASE_NAME, staging / PARQUET_DIRECTORY)
+        summary = _summary(unified_state, all_rows["runs"], all_rows["summaries"], excluded, environment)
+        summary["source_experiments"] = presentation["source_experiments"]
+        summary["matched_pair_count"] = len(pairs)
+        _write_json(staging / SUMMARY_NAME, summary)
+        _write_json(staging / PRESENTATION_NAME, presentation)
+        _write_json(staging / "comparison.json", comparison_payload)
+        _write_json(staging / ARCHIVAL_MANIFEST_NAME, _archival_manifest(unified_state, all_rows["artifacts"]))
+        _write_json(staging / "charts.json", {"schema_version": REPORT_SCHEMA_VERSION, "curves": all_rows["curves"]})
+        (staging / HTML_NAME).write_text(_html_report(summary, presentation), encoding="utf-8", newline="\n")
+        manifest = _seal_report(staging, unified_state, all_rows, excluded)
+        verify_report(staging)
+        staging.rename(target)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return ReportBuild(root=target, manifest=manifest)
+
+
 def verify_report(report_root: Path) -> dict[str, Any]:
     """Verify a derived report's own manifest and checksum inventory."""
     root = report_root.expanduser().resolve()
@@ -440,18 +571,27 @@ def _load_state(root: Path) -> ExperimentState:
 def _load_definition(
     state: ExperimentState, explicit: Path | None,
 ) -> tuple[dict[str, RunDefinition], dict[str, str | None], dict[str, Any]]:
-    candidate = explicit
-    if candidate is None:
-        conventional = Path.cwd() / "experiments" / f"{state.experiment_id}.yaml"
-        candidate = conventional if conventional.is_file() else None
-    if candidate is None:
+    candidates = [explicit] if explicit is not None else [
+        Path.cwd() / "experiments" / f"{state.experiment_id}.yaml",
+        *sorted((Path.cwd() / "experiments").glob("*.yaml")),
+    ]
+    matches: list[tuple[Any, Path]] = []
+    for candidate in candidates:
+        if candidate is None or not candidate.is_file():
+            continue
+        try:
+            definition = load_experiment(candidate)
+        except ExperimentConfigError as exc:
+            if explicit is not None:
+                raise ReportError(f"invalid supplied experiment definition: {exc}") from exc
+            continue
+        if definition.experiment_id == state.experiment_id and definition.definition_digest == state.definition_digest:
+            matches.append((definition, candidate))
+    if not matches:
+        if explicit is not None:
+            raise ReportError("experiment definition does not match immutable experiment state")
         return {}, {}, {"definition_available": False}
-    try:
-        definition = load_experiment(candidate)
-    except ExperimentConfigError as exc:
-        raise ReportError(f"invalid supplied experiment definition: {exc}") from exc
-    if definition.experiment_id != state.experiment_id or definition.definition_digest != state.definition_digest:
-        raise ReportError("experiment definition does not match immutable experiment state")
+    definition, candidate = matches[0]
     environment = {
         "fixed_environment_id": definition.fixed_environment.fixed_environment_id,
         "model": definition.fixed_environment.model.name,
@@ -466,6 +606,32 @@ def _load_definition(
         environment,
         _definition_presentation(definition, candidate),
     )
+
+
+def _combined_definition_presentation(
+    definitions: list[dict[str, Any]], sources: list[Path],
+) -> dict[str, Any]:
+    """Merge display-only immutable metadata without inventing a new experiment."""
+    first = dict(definitions[0])
+    for field, key in (("prompts", "prompt_id"), ("profiles", "profile_id"), ("harnesses", "harness_id")):
+        seen: dict[str, dict[str, Any]] = {}
+        for definition in definitions:
+            for item in definition.get(field, []):
+                if isinstance(item, dict) and isinstance(item.get(key), str):
+                    prior = seen.setdefault(item[key], item)
+                    if prior != item:
+                        raise ReportError(f"incompatible {field} metadata for {item[key]}")
+        first[field] = [seen[name] for name in sorted(seen)]
+    first["definition_available"] = True
+    first["definition_source"] = "multiple immutable definitions"
+    first["source_definition_digests"] = [definition.get("definition_digest") for definition in definitions]
+    first["source_root_names"] = [source.name for source in sources]
+    first["repetition_indices"] = sorted({
+        repetition for definition in definitions for repetition in definition.get("repetition_indices", [])
+        if isinstance(repetition, int)
+    })
+    first["repetitions"] = len(first["repetition_indices"])
+    return first
 
 
 def _definition_presentation(definition: Any, source: Path) -> dict[str, Any]:
@@ -972,6 +1138,7 @@ def _presentation(
     *,
     summary_environment: dict[str, str | None],
     definition_presentation: dict[str, Any],
+    source_by_run: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     """Build the safe, rich payload consumed by the offline dashboard."""
     by_run = {row["run_id"]: row for row in rows["runs"]}
@@ -1005,7 +1172,7 @@ def _presentation(
             },
         }
         if run.get("evidence_status") == "verified":
-            artifact_root = source / "artifacts" / run_id
+            artifact_root = (source_by_run or {}).get(run_id, source) / "artifacts" / run_id
             manifest = json.loads((artifact_root / "run" / "manifest.json").read_text(encoding="utf-8"))
             detail["capture_capabilities"] = _sanitize_public(manifest.get("capture_capabilities", {}))
             detail["invocation"] = _captured_invocation(artifact_root, str(run.get("harness") or ""))
@@ -1109,7 +1276,7 @@ def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
   <nav aria-label="Report sections"><a href="#overview">Overview</a><a href="#matrix">Matrix + fixed config</a><a href="#comparison">Comparison</a><a href="#context">Context</a><a href="#prompts">Tasks + prompts</a><a href="#explorer">Run explorer</a><a href="#provenance">Provenance</a><a href="#data">Data</a></nav>
   <section><h2>Overview</h2><p>Execution and preservation facts only. <strong>Success is not task correctness</strong>; manual application quality is not reviewed here.</p><div id="kpis" class="kpis"></div><h3>Executed run</h3><div id="executed-card" class="grid"></div></section>
   <section id="matrix"><h2>Benchmark Matrix + Fixed Configuration</h2><p class="muted">Matrix settings vary per run. The configuration below is fixed across the experiment and is displayed from the versioned experiment and backend configuration sources.</p><div id="matrix-summary" class="two"></div><details open><summary>Fixed model, llama.cpp backend, hardware, server, template, and generation configuration</summary><div id="fixed-config"></div></details></section>
-  <section id="comparison"><h2>Comparison Dashboard</h2><p class="muted">Individual completed runs are shown. Median/Q1/Q3 are Type 7 summaries only when multiple values are available; N=1 intentionally has no variability claim. These comparisons contain no winner or quality judgement.</p><div id="comparison-controls" class="filters"></div><div id="comparison-charts"></div><details><summary>Deterministic comparison summary table</summary><p class="muted">Click a column heading to sort the currently selected group. Sort numeric metric columns ascending to find the lowest measured time or resource use; sort delta columns in either direction to find the largest measured reduction or increase. These are metric observations, not quality rankings.</p><div id="comparison-table"></div></details></section>
+  <section id="comparison"><h2>Comparison Dashboard</h2><p class="muted">RAW RUN METRICS and MATCHED SEED / PAIRED PROFILE EFFECTS are distinct. Median/Q1/Q3 are Type 7 summaries only when multiple values are available; N=1 intentionally has no variability claim. These comparisons contain no winner or quality judgement. Prompt variants may produce different implementations and are not directly efficiency-comparable unless functional equivalence has been established.</p><div id="comparison-controls" class="filters"></div><div id="comparison-charts"></div><details><summary>Raw-run deterministic comparison summary table</summary><p class="muted">Click a column heading to sort the currently selected group. Sort numeric metric columns ascending to find the lowest measured time or resource use; sort delta columns in either direction to find the largest measured reduction or increase. These are metric observations, not quality rankings.</p><div id="comparison-table"></div></details><details open><summary>Matched seed / paired profile effects</summary><p class="muted">Every absolute delta is candidate minus reference. Direction labels describe deterministic behavior or resource observations only; they are not quality or overall agent-performance wins.</p><div id="matched-comparison-table"></div><h3>Paired aggregate effects</h3><div id="matched-summary-table"></div></details></section>
   <section id="context"><h2>Context Behavior</h2><p>Context values are observed at the API boundary where available. Task time starts at the first real task inference request; auxiliary inference is retained separately. Marker triangles are observed event timing, not inferred harness execution timing.</p><div id="context-charts"></div></section>
   <section id="prompts"><h2>Task / Prompt Specificity</h2><p>Variants are byte-exact benchmark inputs for the same semantic task, not quality grades.</p><div id="prompt-comparison"></div></section>
   <section id="explorer"><h2>Run Explorer</h2><p class="muted">The explorer opens on executed runs. Use filters to inspect planned, failed, interrupted, invalid, or all matrix rows. Selecting a row never changes underlying evidence.</p><div id="filters" class="filters"></div><div id="run-list" class="grid"></div><h3>Selected run detail</h3><div id="run-detail" class="run-detail"></div></section>
@@ -1121,7 +1288,7 @@ def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
 (() => {
   const d=JSON.parse(document.getElementById('agent-bench-data').textContent), $=id=>document.getElementById(id), missing='Not recorded (no sealed evidence)', esc=v=>String(v??missing).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])), num=v=>v===null||v===undefined?missing:Number(v).toLocaleString(undefined,{maximumFractionDigits:3}), val=v=>v===null||v===undefined?missing:(typeof v==='number'?num(v):esc(v));
   const colors=['#60a5fa','#f472b6','#5eead4','#fbbf24','#c4b5fd','#fb923c']; let selected=null, mode='executed', filters={harness:'all',task:'all',prompt:'all',repetition:'all'}, tableCounter=0; const tableSorts={};
-  const config=d.definition.backend_configuration||d.definition.fixed_environment||{};
+  const config=d.definition.backend_configuration||d.definition.fixed_environment||{}, profileLabel=id=>({"hermes-default-v1":"xhigh","hermes-reasoning-medium-v1":"medium","hermes-reasoning-low-v1":"low","hermes-reasoning-off-v1":"off"}[id]||id||missing);
   const run=(id)=>d.runs.find(x=>x.run_id===id), completed=()=>d.runs.filter(x=>x.state==='completed'&&x.evidence_status==='verified');
   function flat(obj,prefix=''){const out=[];if(Array.isArray(obj)){if(obj.every(x=>x===null||typeof x!=='object'))out.push([prefix,obj.join(', ')]);else obj.forEach((x,i)=>out.push(...flat(x,`${prefix}[${i}]`)));}else if(obj&&typeof obj==='object'){Object.keys(obj).sort().forEach(k=>out.push(...flat(obj[k],prefix?prefix+'.'+k:k)));}else out.push([prefix,obj]);return out}
   function kv(obj){const rows=flat(obj).map(([k,v])=>`<tr><th>${esc(k)}</th><td class="mono">${val(v)}</td></tr>`).join('');return `<div class="table-wrap"><table><tbody>${rows||'<tr><td>Not recorded (no sealed evidence)</td></tr>'}</tbody></table></div>`}
@@ -1144,7 +1311,8 @@ def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
   $('fixed-config').innerHTML=`<p class="source">Sources: ${esc(d.definition.definition_source||'unavailable')}; ${esc(d.definition.backend_configuration_source||'unavailable')} (path values redacted).</p><div class="two"><div><h3>Model + template + backend identity</h3>${kv({model:config.model||model,chat_template:config.chat_template||model.gguf_metadata,executable:config.executable||backend,llama_cpp_commit:config.llama_cpp_commit||backend.commit,version:backend.version,hardware:config.gpu||hardware})}</div><div><h3>Server + generation (all configured values)</h3>${kv({server:config.server||env.server_parameters,sampling:config.sampling||env.generation,restart_policy:config.restart_policy||env.restart_policy,readiness_policy:env.readiness_policy,warmup:env.warmup})}</div></div>`;
   function groupSummary(group,metric){return (d.summaries||[]).filter(x=>x.grouping===group&&x.metric_name===metric&&x.n_available>0)}
   function bars(title,group,metric){const rows=groupSummary(group,metric);if(!rows.length)return `<div class="chart"><h3>${esc(title)}</h3><p class="empty">No completed values.</p></div>`;const max=Math.max(...rows.map(x=>x.maximum??x.median??0),1);return `<div class="chart"><h3>${esc(title)}</h3><div class="bar-chart">${rows.map((r,i)=>`<div class="bar"><span>${esc(r.group_key)} <span class="muted">N=${r.n_available}</span></span><i style="width:${100*(r.median??0)/max}%;background:${colors[i%colors.length]}"></i><strong>${num(r.median)}</strong><span class="muted">${r.n_available>1?`Q1–Q3 ${num(r.q1)}–${num(r.q3)}`:'individual only; no spread'}</span></div>`).join('')}</div></div>`}
-  function comparison(){const group=$('comparison-group')?.value||'harness', label={harness:'harness',harness_profile:'harness profile',semantic_task:'semantic task',prompt_variant:'prompt variant',repetition:'repetition',harness_task:'harness × task',harness_profile_task:'profile × task',harness_prompt_variant:'harness × prompt',harness_profile_prompt_variant:'profile × prompt',harness_profile_task_prompt_variant:'profile × task × prompt'}[group];const metricLabels={wall_time_seconds:'Wall time (s)',input_tokens:'Input tokens',output_tokens:'Output tokens',llm_requests:'LLM requests',tool_calls:'Tool calls',first_task_context_tokens:'First task context',peak_context_tokens:'Peak context',context_growth_from_first_task_tokens:'Context growth',files_changed:'Files changed'};$('comparison-charts').innerHTML=Object.entries(metricLabels).map(([m,l])=>bars(`${l} by ${label}`,group,m)).join('');const rows=(d.summaries||[]).filter(x=>x.grouping===group);$('comparison-table').innerHTML=table(rows,[['group_key','Group'],['metric_name','Metric'],['n_available','N'],['median','Median'],['q1','Q1'],['q3','Q3'],['minimum','Min'],['maximum','Max']],{id:'comparison-summary',sortable:true});wireSortableTable($('comparison-table'),'comparison-summary')}
+  function matchedComparison(){const comparison=d.matched_comparison;if(!comparison){$('matched-comparison-table').innerHTML='<p class="empty">No matched multi-experiment comparison was requested.</p>';return}$('matched-comparison-table').innerHTML=table((comparison.matched_seed_comparisons||[]).flatMap(pair=>Object.entries(pair.metrics||{}).map(([metric,values])=>({...pair,metric,...values})),[['reference_profile','Reference profile',row=>`<span title="${esc(row.reference_profile)}">${esc(profileLabel(row.reference_profile))}</span>`],['candidate_profile','Candidate profile',row=>`<span title="${esc(row.candidate_profile)}">${esc(profileLabel(row.candidate_profile))}</span>`],['semantic_task','Task'],['prompt_variant','Prompt variant'],['repetition','Repetition'],['seed','Seed'],['metric','Metric'],['reference_value','Reference value'],['candidate_value','Candidate value'],['absolute_delta','Absolute delta'],['relative_delta_percent','Relative delta %'],['direction','Direction']],{id:'matched-seed',sortable:true});wireSortableTable($('matched-comparison-table'),'matched-seed');$('matched-summary-table').innerHTML=table(comparison.aggregated_paired_effects||[],[['reference_profile','Reference profile',row=>`<span title="${esc(row.reference_profile)}">${esc(profileLabel(row.reference_profile))}</span>`],['candidate_profile','Candidate profile',row=>`<span title="${esc(row.candidate_profile)}">${esc(profileLabel(row.candidate_profile))}</span>`],['view','View'],['group_key','Task / stratum'],['metric','Metric'],['n_matched_pairs','N'],['n_available','Available'],['n_not_available','Unavailable'],['median_paired_delta','Median delta'],['mean_paired_delta','Mean delta']],{id:'matched-summary',sortable:true});wireSortableTable($('matched-summary-table'),'matched-summary')}
+  function comparison(){const group=$('comparison-group')?.value||'harness', label={harness:'harness',harness_profile:'harness profile',semantic_task:'semantic task',prompt_variant:'prompt variant',repetition:'repetition',harness_task:'harness × task',harness_profile_task:'profile × task',harness_prompt_variant:'harness × prompt',harness_profile_prompt_variant:'profile × prompt',harness_profile_task_prompt_variant:'profile × task × prompt'}[group];const metricLabels={wall_time_seconds:'Wall time (s)',input_tokens:'Input tokens',output_tokens:'Output tokens',llm_requests:'LLM requests',tool_calls:'Tool calls',first_task_context_tokens:'First task context',peak_context_tokens:'Peak context',context_growth_from_first_task_tokens:'Context growth',files_changed:'Files changed'};$('comparison-charts').innerHTML=Object.entries(metricLabels).map(([m,l])=>bars(`${l} by ${label}`,group,m)).join('');const rows=(d.summaries||[]).filter(x=>x.grouping===group);$('comparison-table').innerHTML=table(rows,[['group_key','Group'],['metric_name','Metric'],['n_available','N'],['median','Median'],['q1','Q1'],['q3','Q3'],['minimum','Min'],['maximum','Max']],{id:'comparison-summary',sortable:true});wireSortableTable($('comparison-table'),'comparison-summary');matchedComparison()}
   $('comparison-controls').innerHTML=`<label>Group comparisons<select id="comparison-group">${[['harness','Harness'],['harness_profile','Harness profile'],['semantic_task','Semantic task'],['prompt_variant','Prompt variant'],['repetition','Repetition'],['harness_task','Harness × task'],['harness_profile_task','Profile × task'],['harness_prompt_variant','Harness × prompt'],['harness_profile_prompt_variant','Profile × prompt'],['harness_profile_task_prompt_variant','Profile × task × prompt']].map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('')}</select></label>`;$('comparison-group').onchange=comparison;comparison();
   function eligible(){return d.runs.filter(r=>{if(mode==='executed'&&!(r.state==='completed'&&r.evidence_status==='verified'))return false;if(mode==='failed'&&!['failed','interrupted','invalid'].includes(r.state)&&r.evidence_status!=='invalid')return false;if(mode==='pending'&&r.state!=='pending')return false;if(filters.harness!=='all'&&r.harness!==filters.harness)return false;if(filters.task!=='all'&&r.semantic_task!==filters.task)return false;if(filters.prompt!=='all'&&r.prompt_variant!==filters.prompt)return false;if(filters.repetition!=='all'&&String(r.repetition)!==filters.repetition)return false;return true})}
   const seriesKey=id=>`series-${encodeURIComponent(id)}`,seriesLabel=id=>d.chart_series_labels?.[id]||(()=>{const r=run(id)||{},rep=Number.isInteger(r.repetition)?`R${String(r.repetition).padStart(3,'0')}`:'R?';return [r.harness_profile||'profile',r.semantic_task||'task unavailable',r.prompt_variant||'prompt unavailable',rep].join(' · ')})();
