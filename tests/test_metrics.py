@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from agent_bench.cli import app
 from agent_bench.events import load_normalized_events, load_raw_events
 from agent_bench.fake_harness import FakeHarness
 from agent_bench.metric_models import RunMetrics
+from agent_bench.models import canonical_sha256
 from agent_bench.metrics import (
     _calculate_behavior,
     _calculate_tokens_and_context,
@@ -471,6 +473,47 @@ def test_identical_inputs_produce_identical_metrics_bytes_and_sha(metrics_run: o
     assert first.record_digest == second.record_digest
     assert "calculation_timestamp" not in first.model_dump(mode="json")
     assert RunMetrics.model_validate_json(first.canonical_json_bytes()) == first
+
+
+def test_historical_metrics_digest_excludes_new_optional_response_fields(metrics_run: object) -> None:
+    """A sealed pre-1.0.2 record remains valid without being rewritten."""
+    current = calculate_run_metrics(metrics_run.artifact_path)  # type: ignore[attr-defined]
+    historic = current.model_dump(mode="json")
+    historic["metric_spec_version"] = "1.0.1"
+    historic["calculator_version"] = "1.0.1"
+    for field in (
+        "reasoning_only_responses", "length_finished_responses",
+        "length_finished_without_tool_call", "requests_before_first_model_tool_call",
+        "output_tokens_before_first_model_tool_call", "requests_before_first_model_edit_call",
+        "output_tokens_before_first_model_edit_call",
+    ):
+        historic["behavior"].pop(field)
+    historic["record_digest"] = canonical_sha256({key: value for key, value in historic.items() if key != "record_digest"})
+    read = RunMetrics.model_validate(historic)
+    assert read.record_digest == historic["record_digest"]
+    assert read.behavior.reasoning_only_responses is None
+
+
+def test_historical_sealed_metrics_artifact_verifies_without_rewriting_source(metrics_run: object, tmp_path: Path) -> None:
+    source = metrics_run.artifact_path  # type: ignore[attr-defined]
+    stored = store_metrics_artifact(source_artifact=source, output_root=tmp_path / "analysis", metrics=calculate_run_metrics(source))
+    historic = json.loads((stored.root / "metrics.json").read_text(encoding="utf-8"))
+    historic["metric_spec_version"] = "1.0.1"; historic["calculator_version"] = "1.0.1"
+    for field in ("reasoning_only_responses", "length_finished_responses", "length_finished_without_tool_call", "requests_before_first_model_tool_call", "output_tokens_before_first_model_tool_call", "requests_before_first_model_edit_call", "output_tokens_before_first_model_edit_call"):
+        historic["behavior"].pop(field)
+    historic["record_digest"] = canonical_sha256({key: value for key, value in historic.items() if key != "record_digest"})
+    metrics_bytes = (json.dumps(historic, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    (stored.root / "metrics.json").write_bytes(metrics_bytes)
+    manifest = json.loads((stored.root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["metrics_record_digest"] = historic["record_digest"]
+    manifest["metrics_sha256"] = hashlib.sha256(metrics_bytes).hexdigest()
+    manifest["record_digest"] = canonical_sha256({key: value for key, value in manifest.items() if key != "record_digest"})
+    manifest_bytes = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    (stored.root / "manifest.json").write_bytes(manifest_bytes)
+    (stored.root / "checksums.sha256").write_text(
+        f"{hashlib.sha256(manifest_bytes).hexdigest()}  manifest.json\n{hashlib.sha256(metrics_bytes).hexdigest()}  metrics.json\n", encoding="utf-8"
+    )
+    assert verify_metrics_artifact(stored.root).metrics.metric_spec_version == "1.0.1"
 
 
 def test_metrics_artifact_is_separate_immutable_linked_and_verified(

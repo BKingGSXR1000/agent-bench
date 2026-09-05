@@ -82,6 +82,8 @@ from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
 from agent_bench.reporting import ReportError, build_report, export_public, report_status, verify_report
 from agent_bench.reasoning_screen import ReasoningScreenError, build_reasoning_screen_comparison
+from agent_bench.comparison import ComparisonError, build_comparison
+from agent_bench.reasoning_template import ReasoningTemplateError, verify_reasoning_template
 from agent_bench.manual_review import (
     ManualReview, ManualReviewError, aggregate_reviews, build_quality_report, latest_reviews, load_protocol,
     prepare_review_copy, review_queue, review_root, save_review, validate_review_against_protocol,
@@ -516,6 +518,28 @@ def report_reasoning_screen(
     typer.echo(json.dumps(comparison, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+@report_app.command("compare")
+def report_compare(
+    experiment_roots: list[Path],
+    output: Path = typer.Option(..., "--output", help="New derived comparison directory."),
+    experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="One immutable definition per root, in the same order."),
+    reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient pairs as candidate minus this reference profile."),
+    all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
+) -> None:
+    """Build read-only matched profile comparisons across experiment roots."""
+    try:
+        root = build_comparison(
+            experiment_roots, output=output,
+            definitions=experiment_definition or None,
+            reference_profile=reference_profile,
+            include_all_pairs=all_pairs,
+        )
+    except ComparisonError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"comparison={root}\nstatus=sealed")
+
+
 @review_app.command("status")
 def review_status_command(experiment_output: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"), subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
     """Show blinded review progress without exposing harness metadata."""
@@ -630,6 +654,17 @@ def review_report(experiment_output: Path, experiment_definition: Path = Path("e
 def _sha256_path(path: Path) -> str:
     import hashlib
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@backend_app.command("verify-reasoning-template")
+def backend_verify_reasoning_template() -> None:
+    """Read-only preflight of all pinned reasoning-effort template branches."""
+    try:
+        result = verify_reasoning_template()
+    except (ReasoningTemplateError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 @backend_app.command("validate")

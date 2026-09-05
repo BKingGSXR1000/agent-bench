@@ -12,6 +12,18 @@ from agent_bench.models import Identifier, Sha256, canonical_sha256
 METRICS_SCHEMA_VERSION: Literal["1.0.0"] = "1.0.0"
 METRIC_SPEC_VERSION: Literal["1.0.2"] = "1.0.2"
 
+# Fields introduced by metric spec 1.0.2.  Their absence is part of the
+# canonical content of sealed 1.0.0/1.0.1 records.
+_RESPONSE_BEHAVIOR_FIELDS = (
+    "reasoning_only_responses",
+    "length_finished_responses",
+    "length_finished_without_tool_call",
+    "requests_before_first_model_tool_call",
+    "output_tokens_before_first_model_tool_call",
+    "requests_before_first_model_edit_call",
+    "output_tokens_before_first_model_edit_call",
+)
+
 Availability = Literal["available", "unavailable", "not_applicable"]
 MetricMethod = Literal[
     "manifest_exact",
@@ -273,9 +285,25 @@ class RunMetrics(MetricsModel):
         expected = canonical_sha256(
             self.model_dump(mode="json", exclude={"record_digest"})
         )
-        if self.record_digest != expected:
-            raise ValueError("record_digest does not match metrics content")
-        return self
+        if self.record_digest == expected:
+            return self
+        # metrics-v1 is an immutable *storage* format, while the metric spec
+        # has acquired optional response-behaviour fields.  Pydantic supplies
+        # their ``None`` defaults when reading a historical record; they were
+        # not present when that record was sealed and consequently must not be
+        # included in its historical digest.  This is deliberately narrow: it
+        # applies only to the two published pre-1.0.2 metric specifications and
+        # only to fields that remain absent/unavailable in those records.
+        if self.metric_spec_version in {"1.0.0", "1.0.1"}:
+            historical = self.model_dump(mode="json", exclude={"record_digest"})
+            behavior = historical.get("behavior")
+            if isinstance(behavior, dict):
+                for name in _RESPONSE_BEHAVIOR_FIELDS:
+                    if behavior.get(name) is None:
+                        behavior.pop(name, None)
+            if self.record_digest == canonical_sha256(historical):
+                return self
+        raise ValueError("record_digest does not match metrics content")
 
     @classmethod
     def create(cls, **values: object) -> RunMetrics:
