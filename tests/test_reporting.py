@@ -213,12 +213,42 @@ def test_comparison_dashboard_emits_offline_numeric_sorting_for_current_group_ro
     assert "Number.isFinite(parsed)" in output
     assert "if(am!==bm)return am?1:-1" in output
     assert "direction==='asc'?compared:-compared" in output
-    # Only rows selected for the active grouping are passed to the sortable table,
+    # Only rows selected for the active filters/group are passed to the sortable table,
     # and its selected order is restored after a group view redraw.
-    assert "filter(x=>x.grouping===group)" in output
+    assert "comparisonSummaryRows(group)" in output
     assert "id:'comparison-summary'" in output
     assert "tableSorts[id]" in output and "applyTableSort(table,saved.key,saved.direction)" in output
     assert "data-sort-indicator" in output and "'↑':'↓'" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
+
+
+def test_group_comparison_bars_have_local_numeric_sorting_after_filters() -> None:
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 3, "completed": 3, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [], "summaries": [],
+        "runs": [
+            {**_run(harness="hermes", task="entry-category", variant="normal", repetition=1, value=10.0), "harness_profile": "hermes-default-v1", "seed": 1001},
+            {**_run(harness="hermes", task="entry-category", variant="normal", repetition=2, value=2.0), "harness_profile": "hermes-reasoning-low-v1", "seed": 1002},
+            {**_run(harness="hermes", task="entry-category", variant="normal", repetition=3, value=100.0), "harness_profile": "hermes-reasoning-medium-v1", "seed": 1003},
+        ],
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert 'data-bar-sort="${esc(id)}"' in output
+    assert "Original</option>" in output and "Ascending</option>" in output and "Descending</option>" in output
+    # Central aggregate (median) drives the category order, with numeric—not
+    # lexical—ordering. Missing values are explicitly final in either order.
+    assert "function orderBarRows(rows,order)" in output
+    assert "const copy=[...rows]" in output
+    assert "if(am!==bm)return am?1:-1" in output
+    assert "order==='ascending'?a-b:b-a" in output
+    assert 'data-bar-category="${esc(r.group_key)}"' in output
+    # The chart summaries are rebuilt from currently filtered completed runs;
+    # sorting never mutates the immutable d.runs input.
+    assert "completed().filter(matchesFilters)" in output
+    assert "barSorts[control.dataset.barSort]=control.value;comparison()" in output
     assert "<script src=" not in output and "cdn" not in output.lower()
 
 
