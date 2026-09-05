@@ -189,6 +189,38 @@ def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() ->
     assert "N/A" not in output
 
 
+def test_comparison_dashboard_emits_offline_numeric_sorting_for_current_group_rows() -> None:
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 3, "completed": 3, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "runs": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [],
+        "summaries": [
+            {"grouping": "harness", "group_key": "a", "metric_name": "wall_time_seconds", "n_available": 2, "median": 10.5, "q1": -2.0, "q3": None, "minimum": 2, "maximum": 100},
+        ],
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    # Headers retain raw values and type metadata, rather than sorting formatted text.
+    assert 'class="sortable-header"' in output
+    assert 'data-sort-type="${type(c)}"' in output
+    assert "numericColumns=new Set" in output
+    assert "relative_delta_percent" in output and "absolute_delta" in output
+    # The local comparator explicitly handles percentage, decimals, negative values,
+    # and unavailable cells; unavailable always ranks after a real value.
+    assert "replace(/%$/,'')" in output
+    assert "Number.isFinite(parsed)" in output
+    assert "if(am!==bm)return am?1:-1" in output
+    assert "direction==='asc'?compared:-compared" in output
+    # Only rows selected for the active grouping are passed to the sortable table,
+    # and its selected order is restored after a group view redraw.
+    assert "filter(x=>x.grouping===group)" in output
+    assert "id:'comparison-summary'" in output
+    assert "tableSorts[id]" in output and "applyTableSort(table,saved.key,saved.direction)" in output
+    assert "data-sort-indicator" in output and "'↑':'↓'" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
+
+
 def test_chart_html_uses_concise_legend_labels_and_offline_series_interaction() -> None:
     run_id = "hermes-hermes-default-v1-entry-category-normal-r001-347450c68e34f414e5c905b6"
     run = _run(harness="hermes", task="entry-category", variant="normal", repetition=1, value=1.0)
