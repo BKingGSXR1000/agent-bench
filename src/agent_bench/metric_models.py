@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_bench.models import Identifier, Sha256, canonical_sha256
 
 METRICS_SCHEMA_VERSION: Literal["1.0.0"] = "1.0.0"
-METRIC_SPEC_VERSION: Literal["1.0.3"] = "1.0.3"
+METRIC_SPEC_VERSION: Literal["1.0.4"] = "1.0.4"
 
 # Fields introduced by metric spec 1.0.2.  Their absence is part of the
 # canonical content of sealed 1.0.0/1.0.1 records.
@@ -34,6 +34,7 @@ MetricMethod = Literal[
     "deterministically_calculated",
     "git_native",
     "not_available",
+    "model_self_report_phrase_v1",
 ]
 UnavailableReason = Literal[
     "source_not_exposed",
@@ -267,6 +268,31 @@ class TerminationResult(MetricsModel):
     source_artifact_paths: tuple[str, ...] = ()
 
 
+class SelfReportedIncompleteEvidence(MetricsModel):
+    """A conservative phrase match in captured model/assistant response text."""
+
+    category: Literal["time_limit", "token_limit", "context_limit", "step_or_turn_limit", "general_incomplete"]
+    source_event_id: str = Field(min_length=1)
+    response_index: int = Field(ge=1)
+    rule_id: str = Field(min_length=1)
+    matched_phrase: str = Field(min_length=1, max_length=200)
+
+
+class CompletionIntegrityMetrics(MetricsModel):
+    """Advisory textual evidence; it never changes objective termination."""
+
+    detection_method: Literal["model_self_report_phrase_v1"] = "model_self_report_phrase_v1"
+    self_reported_incomplete: bool
+    self_reported_limit: bool
+    total_count: int = Field(ge=0)
+    time_limit_count: int = Field(ge=0)
+    token_limit_count: int = Field(ge=0)
+    context_limit_count: int = Field(ge=0)
+    step_or_turn_limit_count: int = Field(ge=0)
+    general_incomplete_count: int = Field(ge=0)
+    evidence: tuple[SelfReportedIncompleteEvidence, ...] = ()
+
+
 class MetricsInputIdentity(MetricsModel):
     artifact_manifest_sha256: Sha256
     run_manifest_sha256: Sha256
@@ -282,9 +308,9 @@ class RunMetrics(MetricsModel):
     """Complete immutable deterministic measurements for one preserved run."""
 
     metrics_id: str = Field(min_length=1)
-    metric_spec_version: Literal["1.0.0", "1.0.1", "1.0.2", "1.0.3"] = METRIC_SPEC_VERSION
+    metric_spec_version: Literal["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4"] = METRIC_SPEC_VERSION
     calculator_name: Literal["agent-bench-metrics"] = "agent-bench-metrics"
-    calculator_version: Literal["1.0.0", "1.0.1", "1.0.2", "1.0.3"] = "1.0.3"
+    calculator_version: Literal["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4"] = "1.0.4"
     calculator_configuration_digest: Sha256
     run_id: Identifier
     input_identity: MetricsInputIdentity
@@ -296,6 +322,8 @@ class RunMetrics(MetricsModel):
     derived: DerivedMetrics
     git_result: GitResultMetrics
     termination: TerminationResult
+    # Omitted by older immutable metrics-v1 records; absence is not false.
+    completion_integrity: CompletionIntegrityMetrics | None = None
     validation_status: Literal["valid", "valid_with_diagnostics"]
     diagnostics: tuple[str, ...] = ()
     record_digest: Sha256
@@ -314,7 +342,7 @@ class RunMetrics(MetricsModel):
         # included in its historical digest.  This is deliberately narrow: it
         # applies only to the two published pre-1.0.2 metric specifications and
         # only to fields that remain absent/unavailable in those records.
-        if self.metric_spec_version in {"1.0.0", "1.0.1", "1.0.2"}:
+        if self.metric_spec_version in {"1.0.0", "1.0.1", "1.0.2", "1.0.3"}:
             historical = self.model_dump(mode="json", exclude={"record_digest"})
             behavior = historical.get("behavior")
             if isinstance(behavior, dict):
@@ -323,6 +351,8 @@ class RunMetrics(MetricsModel):
                         behavior.pop(name, None)
             if historical.get("reasoning") is None:
                 historical.pop("reasoning", None)
+            if historical.get("completion_integrity") is None:
+                historical.pop("completion_integrity", None)
             tokens = historical.get("tokens")
             if isinstance(tokens, dict):
                 for name in ("reasoning_tokens_before_first_tool", "max_continuous_reasoning_tokens"):

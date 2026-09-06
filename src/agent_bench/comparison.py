@@ -20,6 +20,7 @@ from typing import Any
 
 from agent_bench.config import ExperimentConfigError, load_experiment
 from agent_bench.context_storage import verify_context_analysis_artifact
+from agent_bench.completion_integrity import primary_eligibility
 from agent_bench.executor import ExperimentState
 from agent_bench.functional_storage import verify_functional_validation_artifact
 from agent_bench.matrix import expand_experiment
@@ -297,6 +298,14 @@ def _read_definition_root(
         )
         functional = _functional_values(root, artifact, run)
         values.update(functional["metrics"]); provenance.update(functional["provenance"])
+        integrity = stored.metrics.completion_integrity
+        eligible, reasons = primary_eligibility(
+            termination_class=stored.metrics.termination.termination_class,
+            functional_expected=run.functional_scenario is not None,
+            functional_validation_status=functional["fields"]["functional_validation_status"],
+            hard_gate_pass=functional["fields"]["hard_gate_pass"],
+            self_reported_incomplete=(integrity.self_reported_incomplete if integrity else None),
+        )
         rows.append({
             "experiment_id": state.experiment_id, "run_id": run.run_id,
             "harness": run.harness_id, "profile": run.profile_id,
@@ -305,7 +314,12 @@ def _read_definition_root(
             "semantic_task": run.semantic_task_id, "prompt_id": run.prompt_id,
             "prompt_sha256": run.prompt_sha256, "prompt_variant": next(p.variant_label for p in definition.prompts if p.prompt_id == run.prompt_id),
             "repetition": run.repetition_index, "seed": manifest.run_seed if manifest.run_seed is not None else run.generation_seed,
-            "metrics": values, "metric_provenance": provenance, **functional["fields"],
+            "metrics": values, "metric_provenance": provenance,
+            "termination_class": stored.metrics.termination.termination_class,
+            "self_reported_incomplete": integrity.self_reported_incomplete if integrity else None,
+            "self_report_categories": _self_report_categories(integrity),
+            "primary_performance_eligible": eligible,
+            "primary_exclusion_reasons": list(reasons), **functional["fields"],
         })
     fixed = definition.fixed_environment
     return {
@@ -402,6 +416,13 @@ def _read_legacy_root(
             stored.metrics, artifact, reasoning_tokenizer=reasoning_tokenizer,
             reasoning_token_cache=reasoning_token_cache,
         )
+        integrity = stored.metrics.completion_integrity
+        eligible, reasons = primary_eligibility(
+            termination_class=stored.metrics.termination.termination_class,
+            functional_expected=False, functional_validation_status="not_applicable",
+            hard_gate_pass=None,
+            self_reported_incomplete=(integrity.self_reported_incomplete if integrity else None),
+        )
         settings = profile.get("settings") if isinstance(profile.get("settings"), dict) else {}
         rows.append({
             "experiment_id": state.experiment_id, "run_id": progress.run_id,
@@ -412,6 +433,12 @@ def _read_legacy_root(
             "prompt_sha256": prompt.get("sha256"), "prompt_variant": prompt.get("variant_label"),
             "repetition": planned.get("repetition"), "seed": manifest.run_seed,
             "metrics": values, "metric_provenance": provenance,
+            "functional_validation_status": "not_applicable", "hard_gate_pass": None,
+            "termination_class": stored.metrics.termination.termination_class,
+            "self_reported_incomplete": integrity.self_reported_incomplete if integrity else None,
+            "self_report_categories": _self_report_categories(integrity),
+            "primary_performance_eligible": eligible,
+            "primary_exclusion_reasons": list(reasons),
         })
     identity = _legacy_identity(definition)
     return {
@@ -494,6 +521,12 @@ def _functional_values(root: Path, artifact: Path, run: Any) -> dict[str, Any]:
         "provenance": {name: "functional-validation-v1" for name in names},
         "fields": {"functional_validation_status": record.validation_status, "functional_scenario_id": record.scenario.scenario_id, "functional_tier": record.scenario.tier, "hard_gate_pass": result.hard_gate_pass if available else None, "functional_score_percent": result.score_percent if available else None},
     }
+
+
+def _self_report_categories(integrity: Any) -> list[str] | None:
+    if integrity is None:
+        return None
+    return sorted({item.category for item in integrity.evidence})
 
 
 def _metric_values(
