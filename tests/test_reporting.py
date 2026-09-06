@@ -26,6 +26,8 @@ from agent_bench.reporting import (
     verify_report,
     _ingest,
     _comparative_validity,
+    concise_chart_series_labels,
+    build_unified_report,
 )
 from agent_bench.executor import ExperimentState, RunProgress
 from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
@@ -64,6 +66,30 @@ def test_normalized_curve_uses_task_relative_time_and_does_not_cross_unavailable
     assert curve[0] == {"x": 0.0, "context_utilization_percent": 10.0, "value_method": "measured"}
     assert curve[1]["value_method"] == "unavailable_gap"
     assert curve[-1]["context_utilization_percent"] == 30.0
+
+
+def test_concise_chart_labels_use_structured_metadata_and_known_reasoning_mapping() -> None:
+    rows = [
+        {"run_id": "opaque-xhigh-digest", "harness": "hermes", "harness_profile": "hermes-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1},
+        {"run_id": "opaque-medium-digest", "harness": "hermes", "harness_profile": "hermes-reasoning-medium-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1},
+    ]
+    assert concise_chart_series_labels(rows) == {
+        "opaque-medium-digest": "medium · entry-category · normal · R001",
+        "opaque-xhigh-digest": "xhigh · entry-category · normal · R001",
+    }
+
+
+def test_chart_labels_prefix_multiple_harnesses_and_resolve_collisions_without_run_digest() -> None:
+    rows = [
+        {"run_id": "opaque-a", "harness": "hermes", "harness_profile": "hermes-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1, "seed": 1001},
+        {"run_id": "opaque-b", "harness": "hermes", "harness_profile": "hermes-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1, "seed": 1002},
+        {"run_id": "opaque-c", "harness": "opencode", "harness_profile": "opencode-default-v1", "semantic_task": "entry-category", "prompt_variant": "normal", "repetition": 1, "seed": 1001},
+    ]
+    labels = concise_chart_series_labels(rows)
+    assert labels["opaque-a"] == "Hermes · xhigh · entry-category · normal · R001 · seed 1001"
+    assert labels["opaque-b"].endswith("seed 1002")
+    assert labels["opaque-c"] == "OpenCode · default · entry-category · normal · R001"
+    assert all("opaque-" not in label for label in labels.values())
 
 
 def test_synthetic_multi_harness_aggregation_and_parquet_duckdb(tmp_path: Path) -> None:
@@ -162,6 +188,195 @@ def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() ->
     assert "opencode-task-a-vague-1" in output
     assert "135" in output
     assert "N/A" not in output
+
+
+def test_comparison_dashboard_emits_offline_numeric_sorting_for_current_group_rows() -> None:
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 3, "completed": 3, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "runs": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [],
+        "summaries": [
+            {"grouping": "harness", "group_key": "a", "metric_name": "wall_time_seconds", "n_available": 2, "median": 10.5, "q1": -2.0, "q3": None, "minimum": 2, "maximum": 100},
+        ],
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    # Headers retain raw values and type metadata, rather than sorting formatted text.
+    assert 'class="sortable-header"' in output
+    assert 'data-sort-type="${type(c)}"' in output
+    assert "numericColumns=new Set" in output
+    assert "relative_delta_percent" in output and "absolute_delta" in output
+    # The local comparator explicitly handles percentage, decimals, negative values,
+    # and unavailable cells; unavailable always ranks after a real value.
+    assert "replace(/%$/,'')" in output
+    assert "Number.isFinite(parsed)" in output
+    assert "if(am!==bm)return am?1:-1" in output
+    assert "direction==='asc'?compared:-compared" in output
+    # Only rows selected for the active filters/group are passed to the sortable table,
+    # and its selected order is restored after a group view redraw.
+    assert "comparisonSummaryRows(group)" in output
+    assert "id:'comparison-summary'" in output
+    assert "tableSorts[id]" in output and "applyTableSort(table,saved.key,saved.direction)" in output
+    assert "data-sort-indicator" in output and "'↑':'↓'" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
+
+
+def test_group_comparison_bars_have_local_numeric_sorting_after_filters() -> None:
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 3, "completed": 3, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [], "summaries": [],
+        "runs": [
+            {**_run(harness="hermes", task="entry-category", variant="normal", repetition=1, value=10.0), "harness_profile": "hermes-default-v1", "seed": 1001},
+            {**_run(harness="hermes", task="entry-category", variant="normal", repetition=2, value=2.0), "harness_profile": "hermes-reasoning-low-v1", "seed": 1002},
+            {**_run(harness="hermes", task="entry-category", variant="normal", repetition=3, value=100.0), "harness_profile": "hermes-reasoning-medium-v1", "seed": 1003},
+        ],
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert 'data-bar-sort="${esc(id)}"' in output
+    assert "Original</option>" in output and "Ascending</option>" in output and "Descending</option>" in output
+    # Central aggregate (median) drives the category order, with numeric—not
+    # lexical—ordering. Missing values are explicitly final in either order.
+    assert "function orderBarRows(rows,order)" in output
+    assert "const copy=[...rows]" in output
+    assert "if(am!==bm)return am?1:-1" in output
+    assert "order==='ascending'?a-b:b-a" in output
+    assert 'data-bar-category="${esc(r.group_key)}"' in output
+    # The chart summaries are rebuilt from currently filtered completed runs;
+    # sorting never mutates the immutable d.runs input.
+    assert "completed().filter(matchesFilters)" in output
+    assert "barSorts[control.dataset.barSort]=control.value;comparison()" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
+
+
+def test_variant_comparison_is_metric_selectable_and_uses_only_matched_deterministic_observations() -> None:
+    """The ranking view is a metric view, never an efficiency or quality score."""
+    def raw_run(profile: str, value: float | None, *, seed: int = 1001) -> dict[str, object]:
+        return {
+            "experiment_id": f"screen-{profile}", "run_id": f"opaque-{profile}-{seed}",
+            "harness": "hermes", "profile": profile,
+            "reasoning_setting": {"hermes-default-v1": "xhigh", "hermes-reasoning-low-v1": "low"}[profile],
+            "semantic_task": "entry-category", "prompt_variant": "normal", "prompt_sha256": "p" * 64,
+            "repetition": 1, "seed": seed,
+            "metrics": {
+                "timing.wall_time_seconds.value": value,
+                "tokens.output_tokens_total.value": 100 if value is not None else None,
+                "behavior.requests_before_first_model_tool_call.value": 2,
+            },
+        }
+
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 0, "completed": 0, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {"subject_id": "pocket-ledger"}},
+        "summary_environment": {}, "runs": [], "summaries": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": [],
+        "matched_comparison": {"raw_runs": [
+            raw_run("hermes-default-v1", 10.0), raw_run("hermes-reasoning-low-v1", 8.0),
+            raw_run("hermes-default-v1", 12.0, seed=1002), raw_run("hermes-reasoning-low-v1", None, seed=1002),
+        ]},
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "Variant Comparison" in output and "not an overall efficiency score or quality ranking" in output
+    assert "variantMetricLabels" in output
+    assert "Wall time" in output and "Output tokens" in output
+    assert "Requests before first model tool" in output
+    # The selector is populated from finite values in raw immutable report data;
+    # no unavailable or inferred reasoning time/token metric is introduced.
+    assert "function variantMetricKeys(rows)" in output
+    assert "Object.entries(row.metrics||{})" in output
+    assert "reasoning_time_seconds" not in output
+    # Reconstructed reasoning-token fields are allowed only when raw metric
+    # data contains a finite value; the static label alone does not select it.
+    assert "reasoning.reasoning_tokens_total.value" in output
+    # Category identity includes harness, profile, and effective setting, while
+    # matching requires subject/task/exact prompt hash/repetition/seed.
+    assert "function variantDescriptors(rows)" in output
+    assert "${titleCase(row.harness)} · ${profileLabel(row.profile)}" in output
+    assert "row.prompt_sha256,row.repetition,row.seed" in output
+    assert "function variantMatchable(row)" in output
+    assert "rows without task, exact prompt SHA-256, repetition, or seed provenance are explicitly excluded" in output
+    assert "matched by subject, task, exact prompt SHA-256, repetition, and seed" in output
+    # Median/Q1/Q3 are calculated only from matched values. Missing metrics are
+    # explicit, and both sort directions remain numeric with N/A last.
+    assert "median:type7(observed,.5)" in output
+    assert "q1:observed.length>1?type7(observed,.25):null" in output
+    assert "n_unavailable:total-observed.length" in output
+    assert "function orderVariantRows(rows,order)" in output
+    assert "order==='lowest'?a-b:b-a" in output
+    assert "if(am!==bm)return am?1:-1" in output
+    # Delta values are candidate-reference and percentages have a defined zero
+    # reference edge case. Rendering works from copied summaries, never sorting
+    # the sealed d.matched_comparison.raw_runs source.
+    assert "candidate-referenceValue" in output
+    assert "referenceValue===0?null" in output
+    assert "const copy=[...rows]" in output
+    assert "Prompt = All aggregates matched observations within each exact prompt SHA and seed" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
+
+
+def test_unified_report_combines_verified_roots_into_one_sealed_rich_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The combine path reuses the full M9C artifact layout, not a mini report."""
+    from agent_bench import comparison, reporting
+
+    roots = [tmp_path / "old", tmp_path / "screen"]
+    for root in roots:
+        root.mkdir()
+    states = iter([
+        ExperimentState(experiment_id="old", definition_digest="a" * 64, expansion_digest="b" * 64, ordering={}, runs=[], updated_at="2026-01-01T00:00:00Z"),
+        ExperimentState(experiment_id="screen", definition_digest="c" * 64, expansion_digest="d" * 64, ordering={}, runs=[], updated_at="2026-01-01T00:00:00Z"),
+    ])
+    identity = {"subject_baseline": "subject", "model": "model", "backend": "backend", "chat_template": "template", "hardware": "hardware", "context_backend_settings": "settings"}
+    comparison_inputs = iter([
+        {"experiment_id": "old", "root": str(roots[0]), "definition_digest": "a" * 64, "completed_runs": 0, "partial": False, "identity": identity, "rows": []},
+        {"experiment_id": "screen", "root": str(roots[1]), "definition_digest": "c" * 64, "completed_runs": 0, "partial": True, "identity": identity, "rows": []},
+    ])
+    presentation_definition = {
+        "definition_available": True, "definition_digest": "fixture", "prompts": [], "profiles": [], "harnesses": [],
+        "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}, "repetition_indices": [],
+    }
+    monkeypatch.setattr(reporting, "_load_state", lambda _root: next(states))
+    monkeypatch.setattr(reporting, "_load_definition", lambda *_args: ({"fixture": object()}, {"fixed_environment_id": "fixture", "model": "model", "model_sha256": "sha", "backend": "backend", "backend_commit": "commit", "hardware_name": "hardware", "gpu_model": "gpu"}, presentation_definition))
+    monkeypatch.setattr(reporting, "_ingest", lambda *_args: ({name: [] for name in SCHEMAS}, []))
+    monkeypatch.setattr(comparison, "_read_root", lambda *_args: next(comparison_inputs))
+
+    report = build_unified_report(roots, output=tmp_path / "unified")
+    manifest = verify_report(report.root)
+    assert manifest["included_run_ids"] == []
+    assert (report.root / "report.html").is_file()
+    assert (report.root / "comparison.json").is_file()
+    assert (report.root / "parquet" / "runs.parquet").is_file()
+    presentation = json.loads((report.root / "presentation.json").read_text(encoding="utf-8"))
+    assert [item["experiment_id"] for item in presentation["source_experiments"]] == ["old", "screen"]
+    assert "Matched seed / paired profile effects" in (report.root / "report.html").read_text(encoding="utf-8")
+
+
+def test_chart_html_uses_concise_legend_labels_and_offline_series_interaction() -> None:
+    run_id = "hermes-hermes-default-v1-entry-category-normal-r001-347450c68e34f414e5c905b6"
+    run = _run(harness="hermes", task="entry-category", variant="normal", repetition=1, value=1.0)
+    run.update({"run_id": run_id, "harness_profile": "hermes-default-v1", "execution_index": 1, "seed": 1001})
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 1, "completed": 1, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "runs": [run], "summaries": [],
+        "curves": [{"curve_kind": "absolute_elapsed_task_time", "run_id": run_id, "x": 1.0, "context_utilization_percent": 10.0}],
+        "markers": [], "failures": [], "details": {}, "data_files": [],
+        "chart_series_labels": concise_chart_series_labels([run]),
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "xhigh · entry-category · normal · R001" in output
+    assert f">{run_id}</button>" not in output
+    assert "data-series-id" in output and "data-run-id" in output and "aria-controls" in output
+    assert 'title="${esc(id)} — full run identity"' in output and "series-hit" in output
+    assert "wireChartInteractions" in output and "pointerover" in output and "Escape" in output
+    assert "<script src=" not in output and "cdn" not in output.lower()
 
 
 def test_failed_run_evidence_is_reported_as_verified_infrastructure_record(tmp_path: Path) -> None:

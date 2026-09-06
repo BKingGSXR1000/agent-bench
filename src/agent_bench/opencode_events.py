@@ -11,7 +11,7 @@ from agent_bench.events import DerivedEvent, RawEvent, normalize_raw_events
 from agent_bench.models import JsonMapping, canonical_sha256
 
 OPENCODE_NORMALIZER_NAME = "agent-bench-opencode"
-OPENCODE_NORMALIZER_VERSION = "1.0.2"
+OPENCODE_NORMALIZER_VERSION = "1.0.3"
 
 _COMMON_TYPES = frozenset(
     {
@@ -137,9 +137,17 @@ class _OpenCodeTransformer:
             "turn_id": part.get("messageID"),
             "session_id": native.get("sessionID"),
             "native_part_id": part.get("id"),
+            "source_field": "part.text",
         }
         time_value = part.get("time")
         start = time_value.get("start") if isinstance(time_value, dict) else None
+        end = time_value.get("end") if isinstance(time_value, dict) else None
+        if isinstance(start, (int, float)) and not isinstance(start, bool) and isinstance(end, (int, float)) and not isinstance(end, bool):
+            payload["native_reasoning_start_ms"] = start
+            payload["native_reasoning_end_ms"] = end
+            payload["timing_provenance"] = "exact_native"
+        else:
+            payload["timing_provenance"] = "unavailable"
         return (self._at("reasoning", payload, start),)
 
     def _tool(self, native: dict[str, object]) -> tuple[DerivedEvent, ...]:

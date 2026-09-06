@@ -60,6 +60,40 @@ def test_loads_valid_experiment_configuration(
     assert experiment.matrix_digest
 
 
+def test_functional_prompt_association_is_pinned_and_opt_in(
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    """The scenario path is operational; its digests are the run contract."""
+    from agent_bench.subject import load_frozen_subject
+    from agent_bench.matrix import expand_experiment
+
+    root = Path(__file__).parents[1]
+    subject = load_frozen_subject(root / "subjects/taskboard-v1")
+    prompt_path = root / "subjects/taskboard-v1/prompts/task-priority-v1-normal.txt"
+    content = prompt_path.read_bytes()
+    data = copy.deepcopy(experiment_fixture.data)
+    data.update({
+        "identity_version": "2.0.0", "portable_baseline": subject.identity.model_dump(mode="json", exclude={"definition_digest"}),
+        "baseline_repository": str(subject.source_directory), "baseline_revision": subject.identity.baseline_commit,
+    })
+    data["prompts"] = [{
+        "prompt_id": "task-priority-normal", "semantic_task_id": "task-priority-v1",
+        "variant_label": "normal", "path": str(prompt_path), "sha256": hashlib.sha256(content).hexdigest(),
+        "functional_scenario": {
+            "scenario_id": "task-priority-v1", "scenario_definition": str(root / "functional/scenarios/task-priority-v1.yaml"),
+            "prompt_variant": "normal", "suite_manifest": str(root / "functional/suites/taskboard-functional-v1.yaml"),
+        },
+    }]
+    experiment_fixture.write(data)
+    experiment = load_experiment(experiment_fixture.path)
+    association = experiment.prompts[0].functional_scenario
+    assert association is not None
+    assert association.scenario_id == "task-priority-v1"
+    assert association.validator_sha256
+    assert association.suite_id == "taskboard-functional-v1"
+    assert expand_experiment(experiment)[0].functional_scenario == association
+
+
 def test_persisted_models_are_frozen(
     experiment_fixture: ExperimentFixture,
 ) -> None:

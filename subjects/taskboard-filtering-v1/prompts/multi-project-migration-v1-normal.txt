@@ -1,0 +1,1 @@
+Add multiple projects to Taskboard. I need to create, rename, switch, and archive projects; tasks must stay isolated by project. Preserve existing saved tasks through a safe migration, and support JSON export/import without losing project relationships.

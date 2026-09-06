@@ -1,0 +1,15 @@
+schema_version: 1.0.0
+suite_id: taskboard-functional-v1
+suite_version: 1.0.0
+purpose: Planned-only real functional benchmark matrix; do not execute without explicit authorization.
+members:
+  - {tier: easy, scenario_id: task-priority-v1, experiment_definition: ../../experiments/taskboard-functional-easy-v1.yaml, expected_runs: 27}
+  - {tier: medium, scenario_id: combined-filtering-v1, experiment_definition: ../../experiments/taskboard-functional-medium-v1.yaml, expected_runs: 27}
+  - {tier: complex, scenario_id: multi-project-migration-v1, experiment_definition: ../../experiments/taskboard-functional-complex-v1.yaml, expected_runs: 27}
+total_runs: 81
+matrix_dimensions:
+  harnesses: [hermes, opencode, pi]
+  prompt_variants: [vague, normal, precise]
+  repetitions: [1, 2, 3]
+  seeds: [1001, 1002, 1003]
+matching: same scenario_id + exact prompt_sha256 + repetition + seed

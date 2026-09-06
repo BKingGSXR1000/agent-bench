@@ -1,0 +1,23 @@
+schema_version: 1.0.0
+subject_id: taskboard-filtering-v1
+subject_version: 1.0.0
+baseline_repository: baseline-repo
+baseline_commit: cce6673c6bcddd8083f5a2e94434d7c4d9a7f512
+baseline_tree: 83fda66cd98618c46441ca6a6948ac8deb6b0828
+baseline_bundle: baseline-v1.bundle
+baseline_bundle_sha256: 598ada0e9d3376ea28b093cdf19869af8e6627d1635a93cee6857f127e5df685
+derived_from:
+  subject_id: taskboard-priority-v1
+  medium_scenario_id: combined-filtering-v1
+  derivation: evaluator-owned known-good filtering implementation frozen as a separate baseline
+runtime:
+  language: JavaScript
+  runtime: browser with Node.js 26.8.1 available for deterministic validation
+  package_manager: none
+  dependency_lockfile: none
+commands:
+  test: [node, tests/test_baseline.mjs]
+  run: [python3, -m, http.server, "8000"]
+  smoke: [node, tests/test_baseline.mjs]
+project_instruction_policy: no_project_instruction_file
+evaluator_metadata_visible_to_harness: false

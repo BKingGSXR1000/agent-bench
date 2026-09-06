@@ -30,6 +30,7 @@ from conftest import GitRepositoryFixture, RunFixture
 
 EXACT_PROMPT = "Inspect README.md, change the single line `status: pending` to `status: complete`, and make no other source changes.\n"
 EXACT_PROMPT_SHA256 = "03b18403ef4a275d88d1dbaaa9f92f0935a5c38631afa3bcf3c3fbe1526de67f"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_executable(path: Path, source: str) -> Path:
@@ -99,7 +100,7 @@ def _context(tmp_path: Path, run_fixture: RunFixture) -> tuple[HarnessRunContext
 def test_pinned_toolchain_uses_explicit_node_not_restricted_path() -> None:
     profile = load_pi_profile()
     inspect_pi_toolchain(profile.toolchain)
-    assert profile.toolchain.node.path == Path('/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin/node')
+    assert profile.toolchain.node.path == REPOSITORY_ROOT / "toolchains/node/26.8.1/bin/node"
     assert profile.toolchain.node.version == 'v26.8.1'
     assert profile.toolchain.node.path != Path('/usr/bin/node')
     assert profile.toolchain.entrypoint_path.name == 'cli.js'

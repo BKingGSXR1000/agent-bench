@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import http.client
+import io
 import json
 import socket
 import threading
@@ -13,9 +15,31 @@ from agent_bench.events import RawEventWriter, load_raw_events, normalize_raw_ev
 from agent_bench.proxy import (
     LoggingProxy,
     ProxyAddress,
+    _CaptureServer,
     extract_response_observations,
     redact_json_body,
 )
+
+
+def _captured_server_error(exception: BaseException) -> str:
+    """Exercise ThreadingHTTPServer's error boundary without opening a socket."""
+    server = object.__new__(_CaptureServer)
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        try:
+            raise exception
+        except BaseException:
+            server.handle_error(None, ("127.0.0.1", 0))
+    return stderr.getvalue()
+
+
+def test_capture_proxy_suppresses_only_expected_client_disconnect_tracebacks() -> None:
+    for exception in (ConnectionResetError("reset"), BrokenPipeError("broken"), ConnectionAbortedError("aborted")):
+        assert _captured_server_error(exception) == ""
+
+    unexpected = _captured_server_error(RuntimeError("unexpected server failure"))
+    assert "Exception occurred during processing of request" in unexpected
+    assert "RuntimeError: unexpected server failure" in unexpected
 
 
 class _UpstreamHandler(BaseHTTPRequestHandler):

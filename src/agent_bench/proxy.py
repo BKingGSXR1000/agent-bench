@@ -6,6 +6,7 @@ import base64
 import hashlib
 import http.client
 import json
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -174,6 +175,12 @@ class _CaptureServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], state: _ProxyState) -> None:
         self.state = state
         super().__init__(address, _ProxyHandler)
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        """Ignore only expected peer disconnects from this owned proxy."""
+        if isinstance(sys.exception(), (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):

@@ -1,0 +1,1 @@
+Add persistent Low, Medium, and High priority to Taskboard tasks. Users must select it while creating and editing tasks, the list must display it, and old stored tasks without priority must safely receive a deterministic default. Keep existing status, editing, deletion, and local persistence working.

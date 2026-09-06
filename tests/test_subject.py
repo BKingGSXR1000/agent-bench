@@ -10,6 +10,9 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 SUBJECT = ROOT / "subjects" / "pocket-ledger-v1"
+TASKBOARD_SUBJECT = ROOT / "subjects" / "taskboard-v1"
+TASKBOARD_PRIORITY_SUBJECT = ROOT / "subjects" / "taskboard-priority-v1"
+TASKBOARD_FILTERING_SUBJECT = ROOT / "subjects" / "taskboard-filtering-v1"
 
 
 def test_subject_identity_baseline_and_commands_are_frozen() -> None:
@@ -47,3 +50,49 @@ def test_baseline_static_check_does_not_mutate_subject() -> None:
     repository = SUBJECT / "baseline-repo"
     subprocess.run(["python3", "tests/test_baseline.py"], cwd=repository, check=True)
     assert not (repository / ".git").exists()
+
+
+def test_taskboard_frozen_baseline_is_modular_and_has_no_acceptance_suite() -> None:
+    definition = yaml.safe_load((TASKBOARD_SUBJECT / "subject.yaml").read_text())
+    repository = TASKBOARD_SUBJECT / definition["baseline_repository"]
+    bundle = TASKBOARD_SUBJECT / definition["baseline_bundle"]
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == definition["baseline_bundle_sha256"]
+    with tempfile.TemporaryDirectory() as temporary:
+        clone = Path(temporary) / "baseline"
+        subprocess.run(["git", "clone", "--quiet", str(bundle), str(clone)], check=True)
+        assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=clone, text=True).strip() == definition["baseline_commit"]
+        assert subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=clone, text=True).strip() == definition["baseline_tree"]
+        subprocess.run(["node", "tests/test_baseline.mjs"], cwd=clone, check=True)
+    assert (repository / "src" / "taskboard.js").is_file()
+    assert not (repository / "functional").exists()
+
+
+def test_taskboard_priority_derived_baseline_is_frozen_and_independent() -> None:
+    definition = yaml.safe_load((TASKBOARD_PRIORITY_SUBJECT / "subject.yaml").read_text())
+    bundle = TASKBOARD_PRIORITY_SUBJECT / definition["baseline_bundle"]
+    assert definition["derived_from"]["easy_scenario_id"] == "task-priority-v1"
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == definition["baseline_bundle_sha256"]
+    with tempfile.TemporaryDirectory() as temporary:
+        clone = Path(temporary) / "baseline"
+        subprocess.run(["git", "clone", "--quiet", str(bundle), str(clone)], check=True)
+        assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=clone, text=True).strip() == definition["baseline_commit"]
+        subprocess.run(["node", "tests/test_baseline.mjs"], cwd=clone, check=True)
+    assert not (TASKBOARD_PRIORITY_SUBJECT / "baseline-repo" / "functional").exists()
+
+
+def test_taskboard_filtering_derived_baseline_is_frozen_and_has_prompt_variants() -> None:
+    definition = yaml.safe_load((TASKBOARD_FILTERING_SUBJECT / "subject.yaml").read_text())
+    bundle = TASKBOARD_FILTERING_SUBJECT / definition["baseline_bundle"]
+    assert definition["derived_from"]["medium_scenario_id"] == "combined-filtering-v1"
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == definition["baseline_bundle_sha256"]
+    with tempfile.TemporaryDirectory() as temporary:
+        clone = Path(temporary) / "baseline"
+        subprocess.run(["git", "clone", "--quiet", str(bundle), str(clone)], check=True)
+        assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=clone, text=True).strip() == definition["baseline_commit"]
+        subprocess.run(["node", "tests/test_baseline.mjs"], cwd=clone, check=True)
+    prompts = TASKBOARD_FILTERING_SUBJECT / "prompts"
+    manifest = yaml.safe_load((prompts / "manifest.yaml").read_text())
+    for variant, item in manifest["prompts"].items():
+        content = (prompts / item["path"]).read_bytes()
+        assert content
+        assert hashlib.sha256(content).hexdigest() == item["sha256"]

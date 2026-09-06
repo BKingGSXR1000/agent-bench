@@ -1,0 +1,23 @@
+schema_version: 1.0.0
+subject_id: taskboard-priority-v1
+subject_version: 1.0.0
+baseline_repository: baseline-repo
+baseline_commit: a2aad597ed3016fe70d41c0bcd1eb75eefa88c5b
+baseline_tree: d8e6dbc670fb98f5fda2e48ef5277a7460aa1752
+baseline_bundle: baseline-v1.bundle
+baseline_bundle_sha256: 06e43e16ae1ff70176cff6aa89a1f08cd8027ea54608d23de44c14a7ecf1d3f2
+derived_from:
+  subject_id: taskboard-v1
+  easy_scenario_id: task-priority-v1
+  derivation: evaluator-owned known-good priority implementation frozen as a separate baseline
+runtime:
+  language: JavaScript
+  runtime: browser with Node.js 26.8.1 available for deterministic validation
+  package_manager: none
+  dependency_lockfile: none
+commands:
+  test: [node, tests/test_baseline.mjs]
+  run: [python3, -m, http.server, "8000"]
+  smoke: [node, tests/test_baseline.mjs]
+project_instruction_policy: no_project_instruction_file
+evaluator_metadata_visible_to_harness: false

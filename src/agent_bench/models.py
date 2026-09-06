@@ -217,6 +217,10 @@ class PromptDefinition(PersistedModel):
     byte_length: int = Field(ge=0)
     sha256: Sha256
     metadata: JsonMapping = Field(default_factory=dict)
+    # This remains opt-in.  Its absence is deliberately omitted from both the
+    # prompt and generated-run identity payloads so sealed pre-M13 matrices do
+    # not acquire a synthetic null/default field.
+    functional_scenario: "FunctionalScenarioAssociation | None" = None
 
     @model_validator(mode="after")
     def validate_content_identity(self) -> PromptDefinition:
@@ -231,7 +235,7 @@ class PromptDefinition(PersistedModel):
         return self
 
     def _definition_identity(self) -> object:
-        return {
+        payload: dict[str, object] = {
             "schema_version": self.schema_version,
             "prompt_id": self.prompt_id,
             "semantic_task_id": self.semantic_task_id,
@@ -240,6 +244,49 @@ class PromptDefinition(PersistedModel):
             "byte_length": self.byte_length,
             "sha256": self.sha256,
             "metadata": self.metadata,
+        }
+        if self.functional_scenario is not None:
+            payload["functional_scenario"] = self.functional_scenario._definition_identity()
+        return payload
+
+
+class FunctionalScenarioAssociation(PersistedModel):
+    """Pinned evaluator contract associated with one prompt/run.
+
+    Paths are operational checkout locations.  The scenario and validator byte
+    digests, plus the suite identity where used, are the portable contract.
+    """
+
+    scenario_id: Identifier
+    scenario_definition: Path
+    scenario_definition_sha256: Sha256
+    validator_version: str = Field(min_length=1)
+    validator_sha256: Sha256
+    prompt_variant: Literal["vague", "normal", "precise"]
+    tier: Literal["easy", "medium", "complex"] | None = None
+    suite_id: Identifier | None = None
+    suite_version: str | None = None
+    suite_manifest_sha256: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def validate_suite_fields(self) -> "FunctionalScenarioAssociation":
+        present = (self.suite_id, self.suite_version, self.suite_manifest_sha256)
+        if any(item is not None for item in present) and not all(item is not None for item in present):
+            raise ValueError("suite_id, suite_version, and suite_manifest_sha256 must be supplied together")
+        return self
+
+    def _definition_identity(self) -> object:
+        return {
+            "schema_version": self.schema_version,
+            "scenario_id": self.scenario_id,
+            "scenario_definition_sha256": self.scenario_definition_sha256,
+            "validator_version": self.validator_version,
+            "validator_sha256": self.validator_sha256,
+            "prompt_variant": self.prompt_variant,
+            "tier": self.tier,
+            "suite_id": self.suite_id,
+            "suite_version": self.suite_version,
+            "suite_manifest_sha256": self.suite_manifest_sha256,
         }
 
 
@@ -566,6 +613,7 @@ class RunDefinition(PersistedModel):
     prompt_definition_digest: Sha256
     prompt_sha256: Sha256
     semantic_task_id: Identifier
+    functional_scenario: FunctionalScenarioAssociation | None = None
     repetition_index: int = Field(ge=1)
     limits: RunLimits
 
@@ -578,6 +626,12 @@ class RunDefinition(PersistedModel):
     def _definition_identity(self) -> object:
         data = super()._definition_identity()
         assert isinstance(data, dict)
+        # The field did not exist in sealed non-functional M1--M12 run
+        # definitions.  Preserve their portable definition digests exactly.
+        if self.functional_scenario is None:
+            data.pop("functional_scenario", None)
+        else:
+            data["functional_scenario"] = self.functional_scenario._definition_identity()
         if self.identity_version == "2.0.0":
             data.pop("baseline_repository", None)
             data.pop("baseline_revision", None)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
 from pydantic import TypeAdapter
 
 from agent_bench import __version__
@@ -35,6 +36,7 @@ from agent_bench.failure import (
 from agent_bench.git import GitOperationError, resolve_baseline
 from agent_bench.matrix import expand_experiment, generate_run_definitions
 from agent_bench.metrics import MetricsCalculationError, calculate_run_metrics
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenizerError
 from agent_bench.metrics_storage import (
     MetricsStorageError,
     store_metrics_artifact,
@@ -46,7 +48,7 @@ from agent_bench.context_storage import (
     store_context_analysis_artifact,
     verify_context_analysis_artifact,
 )
-from agent_bench.models import ExperimentDefinition, Identifier
+from agent_bench.models import ExperimentDefinition, Identifier, canonical_sha256
 from agent_bench.opencode import (
     OpenCodeError,
     load_opencode_profile,
@@ -78,10 +80,29 @@ from agent_bench.executor import (
     status as executor_status,
 )
 from agent_bench.subject import SubjectError, load_frozen_subject
+from agent_bench.functional import (
+    FunctionalValidationError,
+    baseline_check,
+    load_functional_scenario,
+    self_validate,
+    validate_workspace,
+)
+from agent_bench.functional_suite import (
+    FunctionalSuiteError,
+    load_functional_suite,
+    self_check_suite,
+    suite_summary_text,
+)
+from agent_bench.functional_storage import (
+    FunctionalValidationStorageError,
+    verify_functional_validation_artifact,
+)
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
-from agent_bench.reporting import ReportError, build_report, export_public, report_status, verify_report
+from agent_bench.reporting import ReportError, build_report, build_unified_report, export_public, report_status, verify_report
 from agent_bench.reasoning_screen import ReasoningScreenError, build_reasoning_screen_comparison
+from agent_bench.comparison import ComparisonError, build_comparison
+from agent_bench.reasoning_template import ReasoningTemplateError, verify_reasoning_template
 from agent_bench.manual_review import (
     ManualReview, ManualReviewError, aggregate_reviews, build_quality_report, latest_reviews, load_protocol,
     prepare_review_copy, review_queue, review_root, save_review, validate_review_against_protocol,
@@ -150,6 +171,11 @@ report_app = typer.Typer(
 app.add_typer(report_app, name="report")
 review_app = typer.Typer(help="Human-authored M10 functional acceptance reviews; never changes benchmark evidence.", no_args_is_help=True)
 app.add_typer(review_app, name="review")
+functional_app = typer.Typer(
+    help="Run deterministic headless functional scenario validation.",
+    no_args_is_help=True,
+)
+app.add_typer(functional_app, name="functional")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -164,6 +190,111 @@ def main(
     if version:
         typer.echo(__version__)
         raise typer.Exit()
+
+
+@functional_app.command("baseline-check")
+def functional_baseline_check(
+    scenario: Path = typer.Argument(..., help="Checked-in functional scenario YAML."),
+    output: Path = typer.Option(..., "--output", help="New immutable JSON result path."),
+) -> None:
+    """Verify baseline health and the recorded baseline-discrimination vector."""
+    try:
+        result = baseline_check(load_functional_scenario(scenario), output)
+    except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("validate")
+def functional_validate(
+    scenario: Path = typer.Argument(..., help="Checked-in functional scenario YAML."),
+    workspace: Path = typer.Argument(..., help="Read-only post-agent subject workspace."),
+    run_id: str = typer.Option(..., "--run-id", help="Immutable benchmark run identity."),
+    output: Path = typer.Option(..., "--output", help="New immutable JSON result path."),
+) -> None:
+    """Validate one completed agent workspace; it is never modified."""
+    try:
+        result = validate_workspace(load_functional_scenario(scenario), workspace, run_id, output)
+    except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("self-check")
+def functional_self_check(
+    scenario: Path | None = typer.Argument(None, help="Checked-in functional scenario YAML."),
+    all_scenarios: bool = typer.Option(False, "--all", help="Self-check every scenario in the Functional Suite v1 manifest."),
+    output: Path = typer.Option(..., "--output", help="New immutable self-validation result directory."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable suite output when used with --all."),
+) -> None:
+    """Prove a scenario accepts its reference and rejects targeted bad fixtures."""
+    if all_scenarios:
+        if scenario is not None:
+            raise typer.BadParameter("provide either a scenario or --all, not both")
+        try:
+            payload = self_check_suite(load_functional_suite(Path("functional/suites/taskboard-functional-v1.yaml")), output)
+        except (FunctionalSuiteError, FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True) if json_output else suite_summary_text(payload))
+        return
+    if scenario is None:
+        raise typer.BadParameter("provide a scenario or use --all")
+    try:
+        results = self_validate(load_functional_scenario(scenario), output)
+    except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps([result.model_dump(mode="json") for result in results], ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("verify-result")
+def functional_verify_result(path: Path) -> None:
+    """Verify one sealed functional-validation-v1 artifact."""
+    try:
+        stored = verify_functional_validation_artifact(path)
+    except FunctionalValidationStorageError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(stored.manifest.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("inspect-result")
+def functional_inspect_result(path: Path) -> None:
+    """Read one verified functional-validation-v1 result."""
+    try:
+        stored = verify_functional_validation_artifact(path)
+    except FunctionalValidationStorageError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(stored.result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("plan")
+def functional_plan(path: Path) -> None:
+    """Expand a planned functional suite without starting a harness or backend."""
+    suite_path = path.expanduser().resolve()
+    try:
+        raw = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+        members = raw["members"]
+        if not isinstance(members, list):
+            raise ValueError("members must be a list")
+        entries = []
+        for member in members:
+            definition = load_experiment((suite_path.parent / member["experiment_definition"]).resolve())
+            runs = expand_experiment(definition)
+            if len(runs) != member["expected_runs"]:
+                raise ValueError(f"unexpected expansion count for {definition.experiment_id}")
+            if {run.functional_scenario.scenario_id for run in runs} != {member["scenario_id"]}:
+                raise ValueError(f"scenario association disagrees with suite member for {definition.experiment_id}")
+            if {run.functional_scenario.tier for run in runs} != {member["tier"]}:
+                raise ValueError(f"tier association disagrees with suite member for {definition.experiment_id}")
+            serialized_runs = [item.model_dump(mode="json", exclude={"definition_digest"}) for item in runs]
+            association = runs[0].functional_scenario
+            entries.append({"tier": member["tier"], "scenario_id": member["scenario_id"], "experiment_id": definition.experiment_id, "definition_digest": definition.definition_digest, "expansion_digest": canonical_sha256(serialized_runs), "baseline": definition.portable_baseline.model_dump(mode="json", exclude={"definition_digest"}), "scenario_contract": association.model_dump(mode="json"), "runs": serialized_runs})
+        all_runs = [run for entry in entries for run in entry["runs"]]
+        if len(all_runs) != raw["total_runs"]:
+            raise ValueError("suite total_runs does not match expanded definitions")
+        payload = {"schema_version": "1.0.0", "suite_id": raw["suite_id"], "suite_version": raw["suite_version"], "total_runs": len(all_runs), "by_harness": {name: sum(item["harness_id"] == name for item in all_runs) for name in ("hermes", "opencode", "pi")}, "by_tier": {entry["tier"]: len(entry["runs"]) for entry in entries}, "members": entries}
+    except (OSError, ValueError, KeyError, ExperimentConfigError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
 @experiment_app.command("validate")
@@ -370,16 +501,27 @@ def artifact_restore(path: Path, destination: Path) -> None:
 
 
 @metrics_app.command("calculate")
-def metrics_calculate(source_artifact: Path, output_root: Path) -> None:
+def metrics_calculate(
+    source_artifact: Path,
+    output_root: Path,
+    reasoning_tokenizer_executable: Path | None = typer.Option(None, "--reasoning-tokenizer-executable", help="Pinned llama-tokenize executable; enables exact reasoning block tokenization."),
+    reasoning_tokenizer_model: Path | None = typer.Option(None, "--reasoning-tokenizer-model", help="Pinned GGUF model for exact reasoning tokenization."),
+    reasoning_tokenizer_model_sha256: str | None = typer.Option(None, "--reasoning-tokenizer-model-sha256", help="Sealed SHA-256 identity of the GGUF model."),
+    reasoning_tokenizer_commit: str | None = typer.Option(None, "--reasoning-tokenizer-commit", help="Pinned llama.cpp commit for llama-tokenize."),
+) -> None:
     """Calculate and seal a separate immutable metrics artifact."""
     try:
-        metrics = calculate_run_metrics(source_artifact)
+        tokenizer_options = (reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit)
+        if any(value is not None for value in tokenizer_options) and not all(value is not None for value in tokenizer_options):
+            raise MetricsCalculationError("all --reasoning-tokenizer-* options are required together")
+        tokenizer = LlamaTokenizeCounter(reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit) if all(value is not None for value in tokenizer_options) else None
+        metrics = calculate_run_metrics(source_artifact, reasoning_tokenizer=tokenizer)
         stored = store_metrics_artifact(
             source_artifact=source_artifact,
             output_root=output_root,
             metrics=metrics,
         )
-    except (MetricsCalculationError, MetricsStorageError, PreservationError) as exc:
+    except (MetricsCalculationError, MetricsStorageError, PreservationError, ReasoningTokenizerError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
@@ -516,6 +658,49 @@ def report_reasoning_screen(
     typer.echo(json.dumps(comparison, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+@report_app.command("compare")
+def report_compare(
+    experiment_roots: list[Path],
+    output: Path = typer.Option(..., "--output", help="New derived comparison directory."),
+    experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="Read-only immutable definition mapping: one YAML per root, in the same order."),
+    reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient pairs as candidate minus this reference profile."),
+    all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
+) -> None:
+    """Build read-only matched profile comparisons across experiment roots."""
+    try:
+        root = build_comparison(
+            experiment_roots, output=output,
+            definitions=experiment_definition or None,
+            reference_profile=reference_profile,
+            include_all_pairs=all_pairs,
+        )
+    except ComparisonError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"comparison={root}\nstatus=sealed")
+
+
+@report_app.command("combine")
+def report_combine(
+    experiment_roots: list[Path],
+    output: Path = typer.Option(..., "--output", help="New unified full-report directory."),
+    experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="Read-only immutable definition mapping: one YAML per root, in the same order."),
+    reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient matched pairs as candidate minus this reference profile."),
+    all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
+) -> None:
+    """Build one rich offline report from multiple compatible experiment roots."""
+    try:
+        report = build_unified_report(
+            experiment_roots, output=output,
+            experiment_definitions=experiment_definition or None,
+            reference_profile=reference_profile, include_all_pairs=all_pairs,
+        )
+    except (ReportError, ComparisonError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"report={report.root}\nstatus=sealed\nincluded_runs={len(report.manifest['included_run_ids'])}")
+
+
 @review_app.command("status")
 def review_status_command(experiment_output: Path, experiment_definition: Path = Path("experiments/pocket-ledger-v1.yaml"), subject_root: Path = Path("subjects/pocket-ledger-v1")) -> None:
     """Show blinded review progress without exposing harness metadata."""
@@ -630,6 +815,17 @@ def review_report(experiment_output: Path, experiment_definition: Path = Path("e
 def _sha256_path(path: Path) -> str:
     import hashlib
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@backend_app.command("verify-reasoning-template")
+def backend_verify_reasoning_template() -> None:
+    """Read-only preflight of all pinned reasoning-effort template branches."""
+    try:
+        result = verify_reasoning_template()
+    except (ReasoningTemplateError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 @backend_app.command("validate")

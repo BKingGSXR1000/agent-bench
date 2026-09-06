@@ -1,0 +1,79 @@
+schema_version: 1.0.0
+suite_id: taskboard-functional-v1
+suite_version: 1.0.0
+scenarios:
+  - scenario_id: task-priority-v1
+    tier: easy
+    scenario_definition: ../scenarios/task-priority-v1.yaml
+    scenario_definition_sha256: 96a1d550ce0d686b5929826daa9d3000b29ef6f9aaff8a898bbf99d0e4bc9ce0
+    subject_id: taskboard-v1
+    baseline_commit: a637d3b64f298f1cf714120186cdf479dd885929
+    baseline_tree: f345fffe2ed49dbcbecce7ea9c210996a6982187
+    baseline_bundle_sha256: 6335c81f69cfd6cfdbc14cd208b35fcf118a510b87e8b7f79a03f59455c5c262
+    validator_sha256: 835e5b2943c6c8a41bcea72baada6a5446032c129489c42106702ebccd781106
+    prompt_manifest: ../../subjects/taskboard-v1/prompts/manifest.yaml
+    prompts:
+      vague: {path: ../../subjects/taskboard-v1/prompts/task-priority-v1-vague.txt, sha256: 7a77ddbd60756b3d5b5a047690299464a805bb79e86f374b90cb656bdc142f8b}
+      normal: {path: ../../subjects/taskboard-v1/prompts/task-priority-v1-normal.txt, sha256: 137776158c5bdd1ad104f8f59cbfde47bb41ab31c69cb1e8063c51b594f77ccf}
+      precise: {path: ../../subjects/taskboard-v1/prompts/task-priority-v1-precise.txt, sha256: 0d234527aed2cc395278b864b9fb8345ab9618eedb66684c571e61e83e93898a}
+    expected_fixture_vector_sha256:
+      untouched-baseline: c84c42f7415c173fbc4e0fc0d889844a996cf6cab7c80f7d572ca2cf44bb5b5f
+      known-good: 6763ea03c1c5aad067291fcefd84fb71566515399b121d5c09c9b6f7e1561fc0
+      known-bad-persistence: 4d2889bef340dd74280366a280be09111f6adf4569330b13f4ffa8c6953c9747
+      known-bad-regression: c72d958df9446226e2c318fab79a1f7ce030bc5bac6626aa2e14c599d73c04b0
+    complexity:
+      source_module_count: 2
+      source_line_count: 59
+      baseline_features: [task CRUD, Todo Doing Done status, local persistence, status filtering]
+      conceptual_change_areas: [task schema, priority validation, persistence compatibility, form and task rendering]
+  - scenario_id: combined-filtering-v1
+    tier: medium
+    scenario_definition: ../scenarios/combined-filtering-v1.yaml
+    scenario_definition_sha256: aaaba0bcf32312ad2646f514de559230ef3c914ad2a0ebfe76aa8cfa1d735dc2
+    subject_id: taskboard-priority-v1
+    baseline_commit: a2aad597ed3016fe70d41c0bcd1eb75eefa88c5b
+    baseline_tree: d8e6dbc670fb98f5fda2e48ef5277a7460aa1752
+    baseline_bundle_sha256: 06e43e16ae1ff70176cff6aa89a1f08cd8027ea54608d23de44c14a7ecf1d3f2
+    validator_sha256: e447ef72da689a88500b3bd32d138a9d09580f83624429c241404c38268fa5f2
+    prompt_manifest: ../../subjects/taskboard-priority-v1/prompts/manifest.yaml
+    prompts:
+      vague: {path: ../../subjects/taskboard-priority-v1/prompts/combined-filtering-v1-vague.txt, sha256: dff89ca292da76c07a7cc146494852b425ac53c7ae258b59b2942ce17f0af619}
+      normal: {path: ../../subjects/taskboard-priority-v1/prompts/combined-filtering-v1-normal.txt, sha256: 26e92b6a5bf9345cbd7f53e6319990a7a4554de05802837730eef028d6653852}
+      precise: {path: ../../subjects/taskboard-priority-v1/prompts/combined-filtering-v1-precise.txt, sha256: 3bc93c5b6d7b037c38499b41de0c711e7b074dd310c0030c9d2b06ebb22f0759}
+    expected_fixture_vector_sha256:
+      untouched-baseline: 77d390b6404a45067972a53992f07653e799ffd453aec75e7d7a395954e9de50
+      known-good: f1b5c4659475e4c06bfd3d308a0a8d43ebad1309bc35d4cd68db2570d4945f88
+      known-bad-or-semantics: fafa93a342b51a7c466b718a69830a78431e8aceb551bd3865e8773364fbaa91
+      known-bad-no-filter-persistence: 556b2c78ade8c656a17e15a66073a72904f11f7032680f157c3202e154fb7a92
+      known-bad-delete-regression: 2d22df5fdc22cfd62eb3b351db0d155255b8c16081c4a60f3d5a446b6c429963
+    complexity:
+      source_module_count: 2
+      source_line_count: 28
+      baseline_features: [task CRUD, priorities, priority persistence, status filtering]
+      conceptual_change_areas: [task description schema, search matching, combined filters, persistent filter state, active-filter interactions]
+  - scenario_id: multi-project-migration-v1
+    tier: complex
+    scenario_definition: ../scenarios/multi-project-migration-v1.yaml
+    scenario_definition_sha256: d8156e338d18a6c557fb190688cb38aacf617dd258e9e3da24e3a6401d47809b
+    subject_id: taskboard-filtering-v1
+    baseline_commit: cce6673c6bcddd8083f5a2e94434d7c4d9a7f512
+    baseline_tree: 83fda66cd98618c46441ca6a6948ac8deb6b0828
+    baseline_bundle_sha256: 598ada0e9d3376ea28b093cdf19869af8e6627d1635a93cee6857f127e5df685
+    validator_sha256: cfa94c006bc83d165dbb63af52d377befb2f0182648015984af58cd0e2a41fff
+    prompt_manifest: ../../subjects/taskboard-filtering-v1/prompts/manifest.yaml
+    prompts:
+      vague: {path: ../../subjects/taskboard-filtering-v1/prompts/multi-project-migration-v1-vague.txt, sha256: d55aee91f6aafdd91849ed5991adbbff97c4e4f48d2462c05d456c7c7f6f28eb}
+      normal: {path: ../../subjects/taskboard-filtering-v1/prompts/multi-project-migration-v1-normal.txt, sha256: fecf4916dba178edc126dcf7b11a9a6ef75a323543b9f742ad1d49de2fddc7cf}
+      precise: {path: ../../subjects/taskboard-filtering-v1/prompts/multi-project-migration-v1-precise.txt, sha256: 2f377dd6400090a403a96f8d682cae335d5d2a807783b532c473390e383142ad}
+    expected_fixture_vector_sha256:
+      known-good: 32b66e6beacb7bacfa1c6bcbcc028f0173dd868935375fd1d87dedc4f90d50f1
+      untouched-baseline: 716d0f273508459cb7713da5cdb2c51dfc3eaa5dc33ab1cd848e5ccc55e37574
+      known-bad-isolation: 5cbef933ea0c09419474eb166cdbdf1e002a3587d0e62c7c27dc70768bde606e
+      known-bad-migration: 37eeed004b8118fd5e634a69f9fc367e5e48eda7a47611be25e410318e3392cb
+      known-bad-import-atomicity: 1620ad95fb8a1466c23751fd1c44e52435cd26958176750220b541139025aec5
+      known-bad-filter-regression: 353a8bc79f19e3b2dc096347cb43ada6ab7c766e377d28fc1f1b91644ce77055
+    complexity:
+      source_module_count: 5
+      source_line_count: 15
+      baseline_features: [task CRUD, priorities, title description search, AND status priority filtering, persisted filters]
+      conceptual_change_areas: [project state schema, migration, project scope, archive transitions, import export validation, atomic persistence]

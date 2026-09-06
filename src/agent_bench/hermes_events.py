@@ -10,7 +10,7 @@ from agent_bench.events import DerivedEvent, RawEvent, normalize_raw_events
 from agent_bench.models import JsonMapping, canonical_sha256
 
 HERMES_NORMALIZER_NAME = "agent-bench-hermes"
-HERMES_NORMALIZER_VERSION = "1.0.2"
+HERMES_NORMALIZER_VERSION = "1.0.3"
 _COMMON_TYPES = frozenset({"run_start", "run_end", "llm_request", "llm_response", "reasoning", "tool_call_start", "tool_call_end", "file_read", "file_search", "file_edit", "file_write", "shell_command", "test_execution", "compaction_start", "compaction_end", "output_truncation", "context_overflow", "harness_error", "backend_error", "timeout", "process_termination"})
 _TOOL_CATEGORIES = {"read_file": "read", "read": "read", "grep": "search", "search": "search", "search_files": "search", "find": "search", "glob": "search", "list_files": "search", "write_file": "write", "write": "write", "edit_file": "edit", "edit": "edit", "patch": "edit", "apply_patch": "edit", "terminal": "shell", "terminal_tool": "shell", "bash": "shell", "shell": "shell", "execute_command": "shell"}
 HERMES_NORMALIZER_CONFIGURATION_DIGEST = canonical_sha256({"normalizer": HERMES_NORMALIZER_NAME, "version": HERMES_NORMALIZER_VERSION, "common_types": sorted(_COMMON_TYPES), "tool_categories": _TOOL_CATEGORIES, "native_event_type": "hermes_session_message", "test_classifier": "hermes-shell-test-v1"})
@@ -38,9 +38,15 @@ class _HermesTransformer:
         events: list[DerivedEvent] = []
         role = native.get("role")
         if role == "assistant":
-            reasoning = native.get("reasoning_content") or native.get("reasoning")
+            # Hermes persists the same thought in both fields on some builds.
+            # reasoning_content is authoritative; reasoning is a fallback only.
+            reasoning = native.get("reasoning_content")
+            reasoning_field = "reasoning_content"
+            if not isinstance(reasoning, str) or not reasoning:
+                reasoning = native.get("reasoning")
+                reasoning_field = "reasoning"
             if isinstance(reasoning, str) and reasoning:
-                events.append(DerivedEvent("reasoning", {"text": reasoning, "message_id": native.get("id")}, "parsed"))
+                events.append(DerivedEvent("reasoning", {"text": reasoning, "message_id": native.get("id"), "source_field": reasoning_field, "timing_provenance": "unavailable"}, "parsed"))
             for call in _tool_calls(native.get("tool_calls")):
                 call_id, name, arguments = _call_parts(call)
                 if not call_id or not name: continue

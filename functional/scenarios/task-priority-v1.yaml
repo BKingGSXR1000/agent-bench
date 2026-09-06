@@ -1,0 +1,119 @@
+schema_version: 1.0.0
+scenario_id: task-priority-v1
+subject_root: ../../subjects/taskboard-v1
+validator: ../validators/task-priority-v1.mjs
+validator_version: 1.0.0
+expected_baseline_outcomes:
+  baseline-initializes: passed
+  baseline-create: passed
+  baseline-edit: passed
+  baseline-delete: passed
+  baseline-status-change: passed
+  baseline-persistence-reload: passed
+  baseline-status-filter: passed
+  priority-create-low: failed
+  priority-create-medium: failed
+  priority-create-high: failed
+  priority-input-visible: failed
+  priority-displayed: failed
+  priority-persists: failed
+  priority-edit: failed
+  edge-legacy-priority: failed
+  edge-invalid-stored-priority: failed
+hard_gates:
+  baseline_regressions: [baseline-initializes, baseline-create, baseline-edit, baseline-delete, baseline-status-change, baseline-persistence-reload, baseline-status-filter]
+  priority_round_trip: [priority-create-low, priority-create-medium, priority-create-high, priority-input-visible, priority-persists, priority-edit]
+  legacy_storage: [edge-legacy-priority, edge-invalid-stored-priority]
+self_validation:
+  untouched-baseline:
+    overlays: []
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        priority-create-low: failed
+        priority-create-medium: failed
+        priority-create-high: failed
+        priority-input-visible: failed
+        priority-displayed: failed
+        priority-persists: failed
+        priority-edit: failed
+        edge-legacy-priority: failed
+        edge-invalid-stored-priority: failed
+      hard_gate_pass: false
+      score_numerator: 7
+      score_denominator: 16
+  known-good:
+    overlays: [../references/task-priority-v1/known-good]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        priority-create-low: passed
+        priority-create-medium: passed
+        priority-create-high: passed
+        priority-input-visible: passed
+        priority-displayed: passed
+        priority-persists: passed
+        priority-edit: passed
+        edge-legacy-priority: passed
+        edge-invalid-stored-priority: passed
+      hard_gate_pass: true
+      score_numerator: 16
+      score_denominator: 16
+  known-bad-persistence:
+    overlays: [../references/task-priority-v1/known-good, ../references/task-priority-v1/known-bad-persistence]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        priority-create-low: passed
+        priority-create-medium: passed
+        priority-create-high: passed
+        priority-input-visible: passed
+        priority-displayed: passed
+        priority-persists: failed
+        priority-edit: passed
+        edge-legacy-priority: passed
+        edge-invalid-stored-priority: passed
+      hard_gate_pass: false
+      score_numerator: 15
+      score_denominator: 16
+  known-bad-regression:
+    overlays: [../references/task-priority-v1/known-good, ../references/task-priority-v1/known-bad-regression]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: failed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        priority-create-low: passed
+        priority-create-medium: passed
+        priority-create-high: passed
+        priority-input-visible: passed
+        priority-displayed: passed
+        priority-persists: passed
+        priority-edit: passed
+        edge-legacy-priority: passed
+        edge-invalid-stored-priority: passed
+      hard_gate_pass: false
+      score_numerator: 15
+      score_denominator: 16

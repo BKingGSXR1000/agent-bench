@@ -20,6 +20,7 @@ from conftest import GitRepositoryFixture, RunFixture
 
 EXACT_PROMPT = "Inspect README.md, change the single line `status: pending` to `status: complete`, and make no other source changes.\n"
 EXACT_PROMPT_SHA256 = "03b18403ef4a275d88d1dbaaa9f92f0935a5c38631afa3bcf3c3fbe1526de67f"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_executable(path: Path, source: str) -> Path:
@@ -71,10 +72,10 @@ def _context(tmp_path: Path, run_fixture: RunFixture) -> tuple[HarnessRunContext
 
 def test_benchmark_managed_toolchain_is_absolute_and_rejects_drift() -> None:
     profile = load_hermes_profile(); inspect_hermes_toolchain(profile.toolchain)
-    assert profile.toolchain.entrypoint_path == Path('/home/bking/AI/agent-bench/toolchains/hermes/0.21.0/venv/bin/hermes')
+    assert profile.toolchain.entrypoint_path == REPOSITORY_ROOT / "toolchains/hermes/0.21.0/venv/bin/hermes"
     assert '/home/bking/.hermes' not in str(profile.toolchain.entrypoint_path)
     assert '/home/bking/.hermes' not in str(profile.toolchain.python_path)
-    assert profile.toolchain.node_path == Path('/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin/node')
+    assert profile.toolchain.node_path == REPOSITORY_ROOT / "toolchains/node/26.8.1/bin/node"
     with pytest.raises(HermesError, match='SHA256'):
         inspect_hermes_toolchain(profile.toolchain.model_copy(update={'entrypoint_sha256': '0' * 64}))
 
@@ -86,7 +87,7 @@ def test_profile_environment_command_and_exact_prompt(tmp_path: Path, run_fixtur
     assert command[-2:] == ('--oneshot', EXACT_PROMPT)
     assert hashlib.sha256(command[-1].encode()).hexdigest() == EXACT_PROMPT_SHA256
     assert environment['HERMES_HOME'] == str(home)
-    assert environment['PATH'] == '/home/bking/AI/agent-bench/toolchains/node/26.8.1/bin:/usr/local/bin:/usr/bin:/bin'
+    assert environment['PATH'] == f"{profile.toolchain.node_path.parent}:/usr/local/bin:/usr/bin:/bin"
     assert environment['TERMINAL_CWD'] == str(context.paths.workspace)
     assert environment['PYTHONNOUSERSITE'] == '1'
     assert '--ignore-rules' not in command and '--safe-mode' not in command

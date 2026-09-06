@@ -1,0 +1,19 @@
+schema_version: 1.0.0
+subject_id: taskboard-v1
+subject_version: 1.0.0
+baseline_repository: baseline-repo
+baseline_commit: a637d3b64f298f1cf714120186cdf479dd885929
+baseline_tree: f345fffe2ed49dbcbecce7ea9c210996a6982187
+baseline_bundle: baseline-v2.bundle
+baseline_bundle_sha256: 6335c81f69cfd6cfdbc14cd208b35fcf118a510b87e8b7f79a03f59455c5c262
+runtime:
+  language: JavaScript
+  runtime: browser with Node.js 26.8.1 available for deterministic validation
+  package_manager: none
+  dependency_lockfile: none
+commands:
+  test: [node, tests/test_baseline.mjs]
+  run: [python3, -m, http.server, "8000"]
+  smoke: [node, tests/test_baseline.mjs]
+project_instruction_policy: no_project_instruction_file
+evaluator_metadata_visible_to_harness: false

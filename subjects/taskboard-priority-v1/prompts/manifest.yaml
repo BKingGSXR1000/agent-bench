@@ -1,0 +1,6 @@
+schema_version: 1.0.0
+scenario_id: combined-filtering-v1
+prompts:
+  vague: {path: combined-filtering-v1-vague.txt, sha256: dff89ca292da76c07a7cc146494852b425ac53c7ae258b59b2942ce17f0af619}
+  normal: {path: combined-filtering-v1-normal.txt, sha256: 26e92b6a5bf9345cbd7f53e6319990a7a4554de05802837730eef028d6653852}
+  precise: {path: combined-filtering-v1-precise.txt, sha256: 3bc93c5b6d7b037c38499b41de0c711e7b074dd310c0030c9d2b06ebb22f0759}

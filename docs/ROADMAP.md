@@ -228,6 +228,49 @@ the baseline dataset. Future harness-profile matrices remain a new explicitly
 planned experiment: 3 profiles per harness would expand the current 135-cell
 default-profile matrix to 405 cells while keeping model/backend fixed.
 
+## M12 — Automated Functional Benchmark Suite v1
+
+Status: completed
+
+Implements a separate, deterministic and headless functional-validation
+dimension. M12 adds frozen `taskboard-v1`, its visible Node baseline check, the
+evaluator-owned `task-priority-v1` acceptance suite, and the Medium
+`combined-filtering-v1` suite over a separately frozen priority-derived
+baseline, plus Complex `multi-project-migration-v1` over a frozen filtering
+derived baseline. All have recorded untouched-baseline discrimination,
+known-good and targeted known-bad validator self-validation, create-only
+versioned JSON results, individual outcomes, category counts, separate hard
+gates and scoring, and `agent-bench functional baseline-check` /
+`agent-bench functional validate` / `agent-bench functional self-check`
+commands. `taskboard-functional-v1` now seals all three scenario identities,
+prompts, fixture vectors, visible-health checks, evaluator-leakage checks, and
+result-schema consistency into one self-validating Functional Suite v1. M12
+scenario construction is complete; executor integration is the next separate
+step. It deliberately does not change live executor behavior, generate a
+composite efficiency score, or run a browser/GPU/real harness.
+
+## M13 — Functional executor integration
+
+M13 integrates the completed M12 scenario contracts as an opt-in per-task
+executor analysis layer. Functional runs receive a visible pre-run
+baseline-health gate and a post-run validator that evaluates only a restored
+sealed source snapshot. `functional-validation-v1` is stored independently of
+metrics and context analysis. Functional incorrectness remains a completed run
+with a functional FAIL outcome; validator/restore/storage faults remain
+explicit analysis-infrastructure failures and preserve retryable sealed source
+evidence. Historical non-functional experiment identities and lifecycle
+requirements are unchanged. Major report/UI integration remains future work.
+
+## M14 — Functional reporting and planned real matrix
+
+M14 adds functional-validation-v1 as a separate verified reporting and matched
+comparison dimension, including status, score, hard gates, regressions,
+scenario, and tier filters. Legacy non-functional evidence remains explicitly
+not applicable. The first real taskboard matrix is prepared but not executed as
+three baseline-homogeneous 27-run definitions (81 planned runs total), with a
+read-only functional plan command. No composite efficiency score or model run
+is introduced.
+
 ## M11 — Qualitative reasoning export
 
 Optional later phase.

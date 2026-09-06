@@ -1,0 +1,1 @@
+Add immediate case-insensitive title/description search and persistent status and priority filters to Taskboard. Combine every active filter with AND semantics, provide clear-all, preserve filter state across reload, and keep active-filter edits/deletes and zero-result behavior correct.

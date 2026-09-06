@@ -1,0 +1,229 @@
+schema_version: 1.0.0
+scenario_id: combined-filtering-v1
+subject_root: ../../subjects/taskboard-priority-v1
+validator: ../validators/combined-filtering-v1.mjs
+validator_version: 1.0.0
+baseline_strategy: derived-priority-baseline
+baseline_strategy_rationale: Priority is a validated Easy feature frozen into taskboard-priority-v1 so this Medium scenario measures combined filtering rather than priority implementation.
+expected_baseline_outcomes:
+  baseline-initializes: passed
+  baseline-create: passed
+  baseline-edit: passed
+  baseline-delete: passed
+  baseline-status-change: passed
+  baseline-persistence-reload: passed
+  baseline-status-filter: passed
+  baseline-priority-persistence: passed
+  search-title: failed
+  search-description: failed
+  search-case-insensitive: failed
+  search-hides-nonmatches: failed
+  search-clear-restores: failed
+  filters-controls-visible: failed
+  filter-status: failed
+  filter-priority: failed
+  combine-search-status: failed
+  combine-search-priority: failed
+  combine-status-priority: failed
+  combine-all-filters: failed
+  combine-and-not-or: failed
+  filter-state-search-persists: failed
+  filter-state-status-persists: failed
+  filter-state-priority-persists: failed
+  filter-state-reload-visible: failed
+  filter-edit-enters: failed
+  filter-edit-leaves: failed
+  filter-delete-active: failed
+  filter-clear-all: failed
+  edge-zero-results-recover: failed
+hard_gates:
+  baseline_regressions: [baseline-initializes, baseline-create, baseline-edit, baseline-delete, baseline-status-change, baseline-persistence-reload, baseline-status-filter, baseline-priority-persistence]
+  filter_combinations: [combine-search-status, combine-search-priority, combine-status-priority, combine-all-filters, combine-and-not-or]
+  filter_persistence: [filter-state-search-persists, filter-state-status-persists, filter-state-priority-persists, filter-state-reload-visible]
+  active_filter_interactions: [filter-edit-enters, filter-edit-leaves, filter-delete-active, filter-clear-all]
+self_validation:
+  untouched-baseline:
+    overlays: []
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        baseline-priority-persistence: passed
+        search-title: failed
+        search-description: failed
+        search-case-insensitive: failed
+        search-hides-nonmatches: failed
+        search-clear-restores: failed
+        filters-controls-visible: failed
+        filter-status: failed
+        filter-priority: failed
+        combine-search-status: failed
+        combine-search-priority: failed
+        combine-status-priority: failed
+        combine-all-filters: failed
+        combine-and-not-or: failed
+        filter-state-search-persists: failed
+        filter-state-status-persists: failed
+        filter-state-priority-persists: failed
+        filter-state-reload-visible: failed
+        filter-edit-enters: failed
+        filter-edit-leaves: failed
+        filter-delete-active: failed
+        filter-clear-all: failed
+        edge-zero-results-recover: failed
+      hard_gate_pass: false
+      score_numerator: 8
+      score_denominator: 30
+  known-good:
+    overlays: [../references/combined-filtering-v1/known-good]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        baseline-priority-persistence: passed
+        search-title: passed
+        search-description: passed
+        search-case-insensitive: passed
+        search-hides-nonmatches: passed
+        search-clear-restores: passed
+        filters-controls-visible: passed
+        filter-status: passed
+        filter-priority: passed
+        combine-search-status: passed
+        combine-search-priority: passed
+        combine-status-priority: passed
+        combine-all-filters: passed
+        combine-and-not-or: passed
+        filter-state-search-persists: passed
+        filter-state-status-persists: passed
+        filter-state-priority-persists: passed
+        filter-state-reload-visible: passed
+        filter-edit-enters: passed
+        filter-edit-leaves: passed
+        filter-delete-active: passed
+        filter-clear-all: passed
+        edge-zero-results-recover: passed
+      hard_gate_pass: true
+      score_numerator: 30
+      score_denominator: 30
+  known-bad-or-semantics:
+    overlays: [../references/combined-filtering-v1/known-good, ../references/combined-filtering-v1/known-bad-or]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        baseline-priority-persistence: passed
+        search-title: passed
+        search-description: passed
+        search-case-insensitive: passed
+        search-hides-nonmatches: passed
+        search-clear-restores: passed
+        filters-controls-visible: passed
+        filter-status: passed
+        filter-priority: passed
+        combine-search-status: failed
+        combine-search-priority: failed
+        combine-status-priority: failed
+        combine-all-filters: failed
+        combine-and-not-or: failed
+        filter-state-search-persists: passed
+        filter-state-status-persists: passed
+        filter-state-priority-persists: passed
+        filter-state-reload-visible: passed
+        filter-edit-enters: passed
+        filter-edit-leaves: passed
+        filter-delete-active: passed
+        filter-clear-all: passed
+        edge-zero-results-recover: passed
+      hard_gate_pass: false
+      score_numerator: 25
+      score_denominator: 30
+  known-bad-no-filter-persistence:
+    overlays: [../references/combined-filtering-v1/known-good, ../references/combined-filtering-v1/known-bad-no-filter-persistence]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        baseline-priority-persistence: passed
+        search-title: passed
+        search-description: passed
+        search-case-insensitive: passed
+        search-hides-nonmatches: passed
+        search-clear-restores: passed
+        filters-controls-visible: passed
+        filter-status: passed
+        filter-priority: passed
+        combine-search-status: passed
+        combine-search-priority: passed
+        combine-status-priority: passed
+        combine-all-filters: passed
+        combine-and-not-or: passed
+        filter-state-search-persists: failed
+        filter-state-status-persists: failed
+        filter-state-priority-persists: failed
+        filter-state-reload-visible: failed
+        filter-edit-enters: passed
+        filter-edit-leaves: passed
+        filter-delete-active: passed
+        filter-clear-all: passed
+        edge-zero-results-recover: passed
+      hard_gate_pass: false
+      score_numerator: 26
+      score_denominator: 30
+  known-bad-delete-regression:
+    overlays: [../references/combined-filtering-v1/known-good, ../references/combined-filtering-v1/known-bad-delete-regression]
+    expected:
+      outcomes:
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: failed
+        baseline-status-change: passed
+        baseline-persistence-reload: passed
+        baseline-status-filter: passed
+        baseline-priority-persistence: passed
+        search-title: passed
+        search-description: passed
+        search-case-insensitive: passed
+        search-hides-nonmatches: passed
+        search-clear-restores: passed
+        filters-controls-visible: passed
+        filter-status: passed
+        filter-priority: passed
+        combine-search-status: passed
+        combine-search-priority: passed
+        combine-status-priority: passed
+        combine-all-filters: passed
+        combine-and-not-or: passed
+        filter-state-search-persists: passed
+        filter-state-status-persists: passed
+        filter-state-priority-persists: passed
+        filter-state-reload-visible: passed
+        filter-edit-enters: passed
+        filter-edit-leaves: passed
+        filter-delete-active: failed
+        filter-clear-all: passed
+        edge-zero-results-recover: passed
+      hard_gate_pass: false
+      score_numerator: 28
+      score_denominator: 30
