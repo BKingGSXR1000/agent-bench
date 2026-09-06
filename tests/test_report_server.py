@@ -293,6 +293,27 @@ def test_report_server_reports_independent_baseline_unavailability(
         thread.join(timeout=2)
 
 
+def test_report_server_appends_and_revokes_manual_adjudication(
+    tmp_path: Path, git_repository: GitRepositoryFixture,
+) -> None:
+    report, output = _fixture_root(tmp_path, git_repository, run_ids=("pass-run",))
+    server, thread, base = _server(report, output)
+    try:
+        status, marked, _ = _request(base + "/api/adjudicate", {"run_id": "pass-run", "decision": "pass"})
+        assert status == 200 and isinstance(marked, dict)
+        assert marked["effective_functional_status"] == "pass"
+        assert (output / "adjudications" / "pass-run" / "revision-001.json").is_file()
+        status, undone, _ = _request(base + "/api/adjudicate/undo", {"run_id": "pass-run"})
+        assert status == 200 and isinstance(undone, dict) and undone["decision"] == "revoked"
+        assert (output / "adjudications" / "pass-run" / "revision-002.json").is_file()
+        status, rejected, _ = _request(base + "/api/adjudicate", {"run_id": "unknown", "decision": "pass"})
+        assert status == 400 and isinstance(rejected, dict)
+    finally:
+        server.shutdown()
+        server.close()
+        thread.join(timeout=2)
+
+
 def test_report_server_keeps_a_valid_baseline_available_when_result_is_not_static(
     tmp_path: Path,
     git_repository: GitRepositoryFixture,

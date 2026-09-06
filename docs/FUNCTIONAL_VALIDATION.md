@@ -4,6 +4,31 @@ M12 adds a deterministic, headless functional dimension. It is intentionally
 separate from timing, tokens, tool calls, reasoning, and manual review: it does
 not generate an efficiency score.
 
+## v2 revalidation and local adjudication
+
+`task-priority-v2` corrects an invalid v1 implementation requirement: priority
+is no longer required to appear in `describeTask()`. It proves priority
+creation, Low-to-High editing, state, and reload persistence. The
+implementation-neutral visual criteria (creation control and per-task display)
+are emitted as `manual_review_required`, yielding `needs_review`, never a
+false automated failure.
+
+Existing sealed snapshots can be assessed without rerunning an agent, model,
+or backend:
+
+```sh
+agent-bench functional revalidate EXPERIMENT_OUTPUT RUN_ID \
+  --experiment-definition experiments/taskboard-functional-easy-v1.yaml
+```
+
+This writes a separate create-only
+`analysis/RUN_ID/functional-validation-v2/` artifact bound to the run and
+sealed snapshot hashes. The report resolves correctness in this order: active
+manual PASS, compatible v2 evidence, then v1 evidence. The report server's
+one-click **Mark result OK** appends
+`EXPERIMENT_OUTPUT/adjudications/RUN_ID/revision-###.json`; Undo appends a
+`revoked` revision. Neither action mutates automated evidence.
+
 ## Scenario anatomy
 
 Each evaluator-owned YAML definition under `functional/scenarios/` names a

@@ -1,5 +1,6 @@
 """Agent Bench command-line interface."""
 
+import hashlib
 import json
 import shlex
 import shutil
@@ -96,6 +97,7 @@ from agent_bench.functional_suite import (
 )
 from agent_bench.functional_storage import (
     FunctionalValidationStorageError,
+    validate_and_store_functional_artifact,
     verify_functional_validation_artifact,
 )
 from agent_bench.toolchains import verify_toolchains
@@ -266,6 +268,43 @@ def functional_inspect_result(path: Path) -> None:
     except FunctionalValidationStorageError as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(stored.result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("revalidate")
+def functional_revalidate(
+    experiment_output: Path = typer.Argument(..., help="Existing experiment output containing sealed results."),
+    run_id: str = typer.Argument(..., help="Completed preserved run to revalidate."),
+    experiment_definition: Path = typer.Option(..., "--experiment-definition", help="Exact immutable experiment YAML."),
+) -> None:
+    """Apply the corrected v2 validator to one sealed snapshot only.
+
+    This restores the preserved source into a disposable directory and starts
+    neither a harness nor a model/backend workload.
+    """
+    try:
+        state = ExperimentState.model_validate_json((experiment_output / "experiment-state.json").read_bytes())
+        if not any(item.run_id == run_id and item.state == "completed" for item in state.runs):
+            raise ValueError("run_id is unknown or not completed")
+        definition = load_experiment(experiment_definition)
+        run = next(item for item in expand_experiment(definition) if item.run_id == run_id)
+        if run.functional_scenario is None or run.functional_scenario.scenario_id != "task-priority-v1":
+            raise ValueError("functional validator v2 is currently available only for task-priority-v1")
+        scenario_path = Path("functional/scenarios/task-priority-v2.yaml").resolve()
+        scenario = load_functional_scenario(scenario_path)
+        association = run.functional_scenario.model_copy(update={
+            "scenario_definition": scenario_path,
+            "scenario_definition_sha256": hashlib.sha256(scenario_path.read_bytes()).hexdigest(),
+            "validator_version": scenario.validator_version,
+            "validator_sha256": hashlib.sha256(scenario.validator.read_bytes()).hexdigest(),
+        })
+        stored = validate_and_store_functional_artifact(
+            source_artifact=experiment_output / "artifacts" / run_id,
+            output_root=experiment_output / "analysis", run_id=run_id,
+            experiment_id=state.experiment_id, association=association, validator_version_label="v2",
+        )
+    except (OSError, StopIteration, ValueError, FunctionalValidationStorageError, FunctionalValidationError, SubjectError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps({"run_id": run_id, "validation_status": stored.result.validation_status, "artifact": str(stored.root)}, sort_keys=True))
 
 
 @functional_app.command("plan")
