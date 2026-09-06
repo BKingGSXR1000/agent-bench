@@ -14,6 +14,7 @@ import os
 import shutil
 import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_EVEN
 from pathlib import Path
@@ -35,7 +36,7 @@ from agent_bench.matrix import expand_experiment
 from agent_bench.metrics_storage import verify_metrics_artifact
 from agent_bench.models import RunDefinition, canonical_sha256
 from agent_bench.preservation import verify_artifact
-from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenCache
 from agent_bench.result_store import verify_published_result
 from agent_bench.timing_provenance_storage import verify_timing_provenance_artifact
 
@@ -244,6 +245,8 @@ def build_unified_report(
     experiment_definitions: list[Path] | None = None,
     reference_profile: str | None = None, include_all_pairs: bool = False,
     reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> ReportBuild:
     """Build one rich, sealed report from compatible immutable experiment roots.
 
@@ -263,12 +266,31 @@ def build_unified_report(
 
     # Comparison's reader has the strict historical-evidence compatibility
     # checks, including report-v1 fallback for roots that predate embedded YAML.
-    from agent_bench.comparison import _compatibility, _pairs, _read_root, _summaries
+    from agent_bench.comparison import (
+        _compatibility,
+        _completed_run_total,
+        _pairs,
+        _read_root,
+        _resolve_reasoning_token_cache,
+        _summaries,
+    )
+
+    cache = _resolve_reasoning_token_cache(
+        target, sources, reasoning_tokenizer, reasoning_token_cache,
+    )
+    total = _completed_run_total(sources) if progress is not None else 0
+    completed = 0
+
+    def on_run(run_id: str) -> None:
+        nonlocal completed
+        completed += 1
+        if progress is not None:
+            progress(completed, total, run_id)
 
     comparison_inputs = [
         _read_root(
             root, experiment_definitions[index] if experiment_definitions else None,
-            reasoning_tokenizer,
+            reasoning_tokenizer, cache, on_run if progress is not None else None,
         )
         for index, root in enumerate(sources)
     ]

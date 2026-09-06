@@ -36,7 +36,7 @@ from agent_bench.failure import (
 from agent_bench.git import GitOperationError, resolve_baseline
 from agent_bench.matrix import expand_experiment, generate_run_definitions
 from agent_bench.metrics import MetricsCalculationError, calculate_run_metrics
-from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenizerError
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenCache, ReasoningTokenizerError
 from agent_bench.metrics_storage import (
     MetricsStorageError,
     store_metrics_artifact,
@@ -542,6 +542,10 @@ def _reasoning_tokenizer_from_options(
     return LlamaTokenizeCounter(executable, model, model_sha256, commit) if all(value is not None for value in options) else None
 
 
+def _report_progress(completed: int, total: int, run_id: str) -> None:
+    typer.echo(f"Processing runs: {completed} / {total}\nCurrent: {run_id}", err=True)
+
+
 @metrics_app.command("show")
 def metrics_show(path: Path) -> None:
     """Print validated metrics JSON, calculating in memory for a run artifact."""
@@ -679,6 +683,7 @@ def report_compare(
     reasoning_tokenizer_model: Path | None = typer.Option(None, "--reasoning-tokenizer-model", help="Pinned GGUF model for exact historical reasoning block tokenization."),
     reasoning_tokenizer_model_sha256: str | None = typer.Option(None, "--reasoning-tokenizer-model-sha256", help="Sealed SHA-256 identity of the GGUF model."),
     reasoning_tokenizer_commit: str | None = typer.Option(None, "--reasoning-tokenizer-commit", help="Pinned llama.cpp commit for llama-tokenize."),
+    reasoning_token_cache: Path | None = typer.Option(None, "--reasoning-token-cache", help="Durable exact reasoning-count cache outside experiment roots."),
 ) -> None:
     """Build read-only matched profile comparisons across experiment roots."""
     try:
@@ -689,6 +694,8 @@ def report_compare(
             reference_profile=reference_profile,
             include_all_pairs=all_pairs,
             reasoning_tokenizer=tokenizer,
+            reasoning_token_cache=ReasoningTokenCache(reasoning_token_cache) if reasoning_token_cache is not None else None,
+            progress=_report_progress if tokenizer is not None else None,
         )
     except (ComparisonError, MetricsCalculationError, ReasoningTokenizerError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -707,6 +714,7 @@ def report_combine(
     reasoning_tokenizer_model: Path | None = typer.Option(None, "--reasoning-tokenizer-model", help="Pinned GGUF model for exact historical reasoning block tokenization."),
     reasoning_tokenizer_model_sha256: str | None = typer.Option(None, "--reasoning-tokenizer-model-sha256", help="Sealed SHA-256 identity of the GGUF model."),
     reasoning_tokenizer_commit: str | None = typer.Option(None, "--reasoning-tokenizer-commit", help="Pinned llama.cpp commit for llama-tokenize."),
+    reasoning_token_cache: Path | None = typer.Option(None, "--reasoning-token-cache", help="Durable exact reasoning-count cache outside experiment roots."),
 ) -> None:
     """Build one rich offline report from multiple compatible experiment roots."""
     try:
@@ -716,6 +724,8 @@ def report_combine(
             experiment_definitions=experiment_definition or None,
             reference_profile=reference_profile, include_all_pairs=all_pairs,
             reasoning_tokenizer=tokenizer,
+            reasoning_token_cache=ReasoningTokenCache(reasoning_token_cache) if reasoning_token_cache is not None else None,
+            progress=_report_progress if tokenizer is not None else None,
         )
     except (ReportError, ComparisonError, MetricsCalculationError, ReasoningTokenizerError) as exc:
         typer.echo(f"Error: {exc}", err=True)

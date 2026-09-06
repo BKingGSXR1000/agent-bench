@@ -106,6 +106,30 @@ def test_stored_reasoning_values_remain_authoritative(
     assert provenance["derived.reasoning_to_output_ratio.value"] == "stored_historic_metrics"
 
 
+def test_non_reasoning_fallback_does_not_invoke_tokenizer_when_reasoning_is_stored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from agent_bench import comparison
+
+    stored = _metric_dump(41)
+    stored["behavior"]["tool_calls_total"]["value"] = None  # type: ignore[index]
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        comparison,
+        "calculate_run_metrics",
+        lambda _artifact, **kwargs: observed.update(kwargs) or SimpleNamespace(model_dump=lambda **_kwargs: _metric_dump(17)),
+    )
+
+    values, provenance = _metric_values(
+        SimpleNamespace(model_dump=lambda **_kwargs: stored), tmp_path,
+        reasoning_tokenizer=object(),  # type: ignore[arg-type]
+    )
+
+    assert observed == {}
+    assert values["reasoning.reasoning_tokens_total.value"] == 41
+    assert provenance["reasoning.reasoning_tokens_total.value"] == "stored_historic_metrics"
+
+
 def test_unavailable_historical_reasoning_evidence_is_not_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
