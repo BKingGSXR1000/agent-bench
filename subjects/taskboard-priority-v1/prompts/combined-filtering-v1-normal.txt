@@ -1,0 +1,1 @@
+Add title/description search plus status and priority filters to Taskboard. Filters should work together, persist after reload, and keep editing, deleting, and existing task behavior correct.

@@ -242,7 +242,11 @@ known-good and targeted known-bad validator self-validation, create-only
 versioned JSON results, individual outcomes, category counts, separate hard
 gates and scoring, and `agent-bench functional baseline-check` /
 `agent-bench functional validate` / `agent-bench functional self-check`
-commands. It deliberately does not change live executor behavior, generate a
+commands. `taskboard-functional-v1` now seals all three scenario identities,
+prompts, fixture vectors, visible-health checks, evaluator-leakage checks, and
+result-schema consistency into one self-validating Functional Suite v1. M12
+scenario construction is complete; executor integration is the next separate
+step. It deliberately does not change live executor behavior, generate a
 composite efficiency score, or run a browser/GPU/real harness.
 
 ## M11 — Qualitative reasoning export

@@ -1,0 +1,1 @@
+Add Low, Medium, and High task priorities to Taskboard. I need to choose and edit priority, see it on tasks, and keep it after reload without breaking older saved tasks.

@@ -8,12 +8,14 @@ from typer.testing import CliRunner
 
 from agent_bench.cli import app
 from agent_bench.functional import baseline_check, load_functional_scenario, self_validate
+from agent_bench.functional_suite import load_functional_suite, self_check_suite
 
 
 ROOT = Path(__file__).parents[1]
 SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v1.yaml"
 MEDIUM_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "combined-filtering-v1.yaml"
 COMPLEX_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "multi-project-migration-v1.yaml"
+SUITE_PATH = ROOT / "functional" / "suites" / "taskboard-functional-v1.yaml"
 
 
 def _source_fingerprint(root: Path) -> dict[str, str]:
@@ -116,3 +118,15 @@ def test_multi_project_self_check_proves_complex_targeted_rejections(tmp_path: P
     assert results["known-bad-migration"].hard_gates["migration_integrity"] is False
     assert results["known-bad-import-atomicity"].hard_gates["import_atomicity"] is False
     assert results["known-bad-filter-regression"].hard_gates["baseline_regressions"] is False
+
+
+def test_taskboard_functional_suite_checks_all_baselines_prompts_leaks_and_schema(tmp_path: Path) -> None:
+    suite = load_functional_suite(SUITE_PATH)
+    payload = self_check_suite(suite, tmp_path / "suite")
+
+    assert payload["suite_status"] == "PASS"
+    assert payload["scenarios_valid"] == payload["scenarios_total"] == 3
+    assert payload["fixtures_matched"] == payload["fixtures_total"] == 15
+    assert payload["leakage_checks_passed"] == 3
+    assert payload["schema_consistency"] == "PASS"
+    assert (tmp_path / "suite/suite-summary.json").is_file()

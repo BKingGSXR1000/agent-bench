@@ -1,0 +1,6 @@
+schema_version: 1.0.0
+scenario_id: task-priority-v1
+prompts:
+  vague: {path: task-priority-v1-vague.txt, sha256: 7a77ddbd60756b3d5b5a047690299464a805bb79e86f374b90cb656bdc142f8b}
+  normal: {path: task-priority-v1-normal.txt, sha256: 137776158c5bdd1ad104f8f59cbfde47bb41ab31c69cb1e8063c51b594f77ccf}
+  precise: {path: task-priority-v1-precise.txt, sha256: 0d234527aed2cc395278b864b9fb8345ab9618eedb66684c571e61e83e93898a}

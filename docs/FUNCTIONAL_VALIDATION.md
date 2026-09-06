@@ -73,6 +73,29 @@ The target workspace is read only. Output paths are create-only: a pre-existing
 result is rejected rather than replaced. Integration with the live executor is
 deliberately deferred; callers must validate an already preserved workspace.
 
+## Functional Suite v1
+
+`functional/suites/taskboard-functional-v1.yaml` seals the Easy, Medium, and
+Complex scenarios into one suite. It records exact scenario/validator/prompt
+identities, frozen baseline lineage, expected fixture-vector digests, and a
+descriptive complexity inventory. Complexity is never used in a score or hard
+gate.
+
+Run every suite invariant with:
+
+```sh
+agent-bench functional self-check --all --output /new/location/taskboard-suite
+```
+
+Use `--json` for machine-readable output. The suite command materializes every
+frozen baseline, runs its visible health command, verifies all scenario
+self-check fixtures and hard gates, validates prompt identities and contracts,
+and checks that evaluator-owned validators/references have not leaked into any
+agent-visible bundle. A single mismatch fails the command.
+
+Prompt wording intentionally differs across vague, normal, and precise variants,
+but all three are bound to the same scenario ID and hidden acceptance contract.
+
 ## Result semantics
 
 The versioned JSON result records scenario/run identity, validator version and
@@ -82,6 +105,15 @@ passed tests over all available tests. `hard_gate_pass` is separate: a numerical
 score never masks a critical failure. Infrastructure absence is recorded as
 `unavailable`; malformed/failed validation infrastructure is `error`; neither
 is silently reclassified as an ordinary functional failure.
+
+## Benchmark interpretation
+
+Functional correctness is a gating/filtering dimension, separate from reasoning
+tokens, reasoning timing, tool calls, context, wall time, and LLM time. A study
+may compare reasoning behavior only among Functional PASS runs, or filter by a
+documented functional-score threshold. It must never call fewer reasoning tokens
+better when the corresponding implementation is functionally worse, and no
+composite efficiency score is produced by M12.
 
 ## Validator self-validation invariant
 

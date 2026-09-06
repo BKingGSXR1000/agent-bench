@@ -86,6 +86,12 @@ from agent_bench.functional import (
     self_validate,
     validate_workspace,
 )
+from agent_bench.functional_suite import (
+    FunctionalSuiteError,
+    load_functional_suite,
+    self_check_suite,
+    suite_summary_text,
+)
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
 from agent_bench.reporting import ReportError, build_report, build_unified_report, export_public, report_status, verify_report
@@ -211,10 +217,23 @@ def functional_validate(
 
 @functional_app.command("self-check")
 def functional_self_check(
-    scenario: Path = typer.Argument(..., help="Checked-in functional scenario YAML."),
+    scenario: Path | None = typer.Argument(None, help="Checked-in functional scenario YAML."),
+    all_scenarios: bool = typer.Option(False, "--all", help="Self-check every scenario in the Functional Suite v1 manifest."),
     output: Path = typer.Option(..., "--output", help="New immutable self-validation result directory."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable suite output when used with --all."),
 ) -> None:
     """Prove a scenario accepts its reference and rejects targeted bad fixtures."""
+    if all_scenarios:
+        if scenario is not None:
+            raise typer.BadParameter("provide either a scenario or --all, not both")
+        try:
+            payload = self_check_suite(load_functional_suite(Path("functional/suites/taskboard-functional-v1.yaml")), output)
+        except (FunctionalSuiteError, FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True) if json_output else suite_summary_text(payload))
+        return
+    if scenario is None:
+        raise typer.BadParameter("provide a scenario or use --all")
     try:
         results = self_validate(load_functional_scenario(scenario), output)
     except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
