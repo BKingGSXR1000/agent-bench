@@ -279,19 +279,32 @@ def functional_plan(path: Path) -> None:
         for member in members:
             definition = load_experiment((suite_path.parent / member["experiment_definition"]).resolve())
             runs = expand_experiment(definition)
-            if len(runs) != member["expected_runs"]:
+            selection = member.get("selection", {})
+            if not isinstance(selection, dict):
+                raise ValueError("suite member selection must be a mapping")
+            selected_runs = [
+                run for run in runs
+                if all(
+                    getattr(run, field, None) in set(values)
+                    for field, values in selection.items()
+                    if isinstance(values, list)
+                )
+            ] if selection else list(runs)
+            if any(not isinstance(values, list) for values in selection.values()):
+                raise ValueError("each suite member selection value must be a list")
+            if len(selected_runs) != member["expected_runs"]:
                 raise ValueError(f"unexpected expansion count for {definition.experiment_id}")
-            if {run.functional_scenario.scenario_id for run in runs} != {member["scenario_id"]}:
+            if {run.functional_scenario.scenario_id for run in selected_runs} != {member["scenario_id"]}:
                 raise ValueError(f"scenario association disagrees with suite member for {definition.experiment_id}")
-            if {run.functional_scenario.tier for run in runs} != {member["tier"]}:
+            if {run.functional_scenario.tier for run in selected_runs} != {member["tier"]}:
                 raise ValueError(f"tier association disagrees with suite member for {definition.experiment_id}")
-            serialized_runs = [item.model_dump(mode="json", exclude={"definition_digest"}) for item in runs]
-            association = runs[0].functional_scenario
-            entries.append({"tier": member["tier"], "scenario_id": member["scenario_id"], "experiment_id": definition.experiment_id, "definition_digest": definition.definition_digest, "expansion_digest": canonical_sha256(serialized_runs), "baseline": definition.portable_baseline.model_dump(mode="json", exclude={"definition_digest"}), "scenario_contract": association.model_dump(mode="json"), "runs": serialized_runs})
+            serialized_runs = [item.model_dump(mode="json", exclude={"definition_digest"}) for item in selected_runs]
+            association = selected_runs[0].functional_scenario
+            entries.append({"tier": member["tier"], "scenario_id": member["scenario_id"], "experiment_id": definition.experiment_id, "definition_digest": definition.definition_digest, "expansion_digest": canonical_sha256(serialized_runs), "baseline": definition.portable_baseline.model_dump(mode="json", exclude={"definition_digest"}), "scenario_contract": association.model_dump(mode="json"), "selection": selection, "runs": serialized_runs})
         all_runs = [run for entry in entries for run in entry["runs"]]
         if len(all_runs) != raw["total_runs"]:
             raise ValueError("suite total_runs does not match expanded definitions")
-        payload = {"schema_version": "1.0.0", "suite_id": raw["suite_id"], "suite_version": raw["suite_version"], "total_runs": len(all_runs), "by_harness": {name: sum(item["harness_id"] == name for item in all_runs) for name in ("hermes", "opencode", "pi")}, "by_tier": {entry["tier"]: len(entry["runs"]) for entry in entries}, "members": entries}
+        payload = {"schema_version": "1.0.0", "suite_id": raw["suite_id"], "suite_version": raw["suite_version"], "total_runs": len(all_runs), "disposable_output_root": raw.get("disposable_output_root"), "by_harness": {name: sum(item["harness_id"] == name for item in all_runs) for name in ("hermes", "opencode", "pi")}, "by_tier": {entry["tier"]: len(entry["runs"]) for entry in entries}, "members": entries}
     except (OSError, ValueError, KeyError, ExperimentConfigError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))

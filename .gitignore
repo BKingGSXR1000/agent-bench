@@ -21,6 +21,11 @@ toolchains/hermes/*/source/
 toolchains/hermes/*/venv/
 toolchains/python/*/
 
+# Exact reasoning tokenization uses externally managed llama.cpp and GGUF
+# payloads.  Only their checked-in configuration identities are tracked.
+llama-tokenize
+*.gguf
+
 runs/
 artifacts/
 .bench/

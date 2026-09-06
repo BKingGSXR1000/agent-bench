@@ -49,6 +49,26 @@ def test_functional_plan_is_read_only_and_reports_the_full_matrix() -> None:
     assert {member["scenario_contract"]["tier"] for member in payload["members"]} == {"easy", "medium", "complex"}
 
 
+def test_disposable_smoke_plan_is_exactly_nine_normal_r001_seed_1001_runs() -> None:
+    result = CliRunner().invoke(
+        app,
+        ["functional", "plan", str(ROOT / "functional/experiments/taskboard-functional-smoke-v1.yaml")],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["total_runs"] == 9
+    assert payload["by_harness"] == {"hermes": 3, "opencode": 3, "pi": 3}
+    assert payload["by_tier"] == {"easy": 3, "medium": 3, "complex": 3}
+    assert payload["disposable_output_root"] == "runs/smoke/taskboard-functional-smoke-v1"
+    assert {run["semantic_task_id"] for member in payload["members"] for run in member["runs"]} == {
+        "task-priority-v1", "combined-filtering-v1", "multi-project-migration-v1",
+    }
+    assert all(run["prompt_id"].endswith("-normal") for member in payload["members"] for run in member["runs"])
+    assert {run["repetition_index"] for member in payload["members"] for run in member["runs"]} == {1}
+    assert {run["generation_seed"] for member in payload["members"] for run in member["runs"]} == {1001}
+
+
 def test_reporting_keeps_legacy_not_applicable_distinct_from_fail_and_validator_faults() -> None:
     fields = {field.name for field in SCHEMAS["runs"]}
     assert {"functional_validation_status", "functional_score_percent", "hard_gate_pass", "baseline_regression_count", "functional_tier", "failed_functional_test_ids"} <= fields
@@ -59,6 +79,10 @@ def test_reporting_keeps_legacy_not_applicable_distinct_from_fail_and_validator_
     presentation = {"generator": {}, "experiment_id": "fixture", "definition_digest": "d", "expansion_digest": "e", "completion": {}, "definition": {"prompts": [], "profiles": [], "fixed_environment": {}}, "summary_environment": {}, "runs": [], "summaries": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": []}
     html = _html_report({"experiment_id": "fixture"}, presentation)
     assert "Functional status" in html and "Hard gate" in html and "Minimum functional score" in html
+    assert html.index('id="variant-comparison"') < html.index('id="functional"') < html.index('id="comparison"')
+    assert 'id="functional" hidden' in html
+    assert 'Show individual runs (${done.length})' in html
+    assert html.index('id="explorer"') > html.index('id="context"')
 
 
 def test_functional_report_projection_keeps_all_validator_states_distinct() -> None:

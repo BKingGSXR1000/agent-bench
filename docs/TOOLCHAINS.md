@@ -63,6 +63,11 @@ For llama.cpp, follow `environment/llama-cpp-build-v1.json`: clone
 Release, CUDA architectures 70 and 86, and build `llama-server`. A
 source-equivalent rebuild is not the reference binary: benchmark-v1 strictly
 requires every executable/shared-library hash in `environment/backend-v1.yaml`.
+The same pinned build must provide `llama-tokenize`; normal run analysis uses
+`--model <GGUF> --stdin --show-count --no-bos` for captured reasoning blocks.
+Its SHA256, llama.cpp commit, GGUF SHA256, and invocation identity are retained
+in metric provenance.  A configured tokenizer that is missing or drifted fails
+preflight; it never produces an approximate or zero reasoning-token value.
 
 ## Archival policy
 
@@ -71,6 +76,10 @@ provenance, and bootstrap logic—not binaries, model weights, `node_modules`,
 Hermes source/venv, or Python runtime. Future GitHub Release assets may be
 listed in `alternate_mirrors` without changing semantic identity: content hashes
 remain authoritative.
+
+Do not commit the compiled `llama-tokenize` executable or any GGUF model.  They
+are external benchmark-managed dependencies; Git contains only their code,
+configuration, and pinned identities.
 
 The only intended tracked Hermes toolchain metadata file is
 `toolchains/hermes/0.21.0/identity.json`; its `source/` and `venv/` payloads

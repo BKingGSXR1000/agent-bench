@@ -22,6 +22,7 @@ from agent_bench.backend import (
     is_port_free,
     load_backend_profile,
     preflight_backend,
+    reasoning_tokenizer_from_profile,
     resolve_backend_invocation,
     seed_for_repetition,
     start_owned_backend,
@@ -213,6 +214,7 @@ def execute_controlled_opencode_run(
         )
         shutil.rmtree(control_root)
         return ControlledOpenCodeResult(None, None, failed)
+    reasoning_tokenizer = reasoning_tokenizer_from_profile(backend)
 
     if phase_reporter is not None:
         phase_reporter("running")
@@ -260,7 +262,9 @@ def execute_controlled_opencode_run(
         )
         if phase_reporter is not None:
             phase_reporter("analyzing")
-        metrics = calculate_run_metrics(result.artifact_path)
+        metrics = calculate_run_metrics(
+            result.artifact_path, reasoning_tokenizer=reasoning_tokenizer,
+        )
         stored = store_metrics_artifact(
             source_artifact=result.artifact_path,
             output_root=output / "analysis",

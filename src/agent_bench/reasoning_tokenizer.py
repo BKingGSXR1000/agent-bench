@@ -43,6 +43,16 @@ class LlamaTokenizeCounter:
     def tokenizer_identity(self) -> str:
         return f"llama-tokenize:{self.llama_cpp_commit}:no-bos-stdin-show-count-v1"
 
+    def identity_record(self) -> dict[str, str]:
+        """The complete reproducible identity persisted in metric provenance."""
+        return {
+            "executable_sha256": self.tokenizer_digest,
+            "llama_cpp_commit": self.llama_cpp_commit,
+            "model_sha256": self.model_sha256,
+            "invocation": "--model <GGUF> --stdin --show-count --no-bos",
+            "tokenizer_identity": self.tokenizer_identity,
+        }
+
     @property
     def tokenizer_digest(self) -> str:
         return hashlib.sha256(self.executable.read_bytes()).hexdigest()

@@ -28,6 +28,7 @@ from agent_bench.backend import (
     parse_gpu_inventory,
     parse_gpu_processes,
     preflight_backend,
+    reasoning_tokenizer_from_profile,
     resolve_backend_invocation,
     seed_for_repetition,
     start_owned_backend,
@@ -127,10 +128,34 @@ def test_checked_in_profile_has_pinned_real_identities() -> None:
     assert profile.model.sha256 == "bee238bbeb3dc0a34bde4d0dedbaee1f98c009e8bb4226f03070054c12fb1372"
     assert profile.chat_template.sha256 == "2d59a4438d68dc818c5a75db4edcf4c588e0976b113c5c87def7fc9c1168e955"
     assert profile.executable.sha256 == "92a71ff10ed10f9a24d5af934770f86e1ac6ef0dfccb7d5612f73a2670bb123b"
+    assert profile.reasoning_tokenizer is not None
+    assert profile.reasoning_tokenizer.sha256 == "63fccdf4bd996260b84f705f8ac180526eb3969bd488ec212b7e2a96c969da7f"
     assert profile.llama_cpp_commit == "dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe"
     assert profile.gpu.expected_uuid == "GPU-63f9c2ad-4dbc-962b-b314-a652bf28fc0d"
     assert profile.chat_template.path.read_bytes()
     assert _sha(profile.chat_template.path) == profile.chat_template.sha256
+
+
+def test_configured_reasoning_tokenizer_carries_pinned_model_and_invocation_identity(tmp_path: Path) -> None:
+    profile = _profile(tmp_path)
+    tokenizer = tmp_path / "llama-tokenize"
+    tokenizer.write_bytes(b"fixture tokenizer")
+    tokenizer.chmod(0o755)
+    configured = profile.model_copy(update={
+        "reasoning_tokenizer": PinnedFile(
+            path=tokenizer, size_bytes=tokenizer.stat().st_size, sha256=_sha(tokenizer),
+        ),
+    })
+
+    counter = reasoning_tokenizer_from_profile(configured)
+
+    assert counter is not None
+    assert counter.identity_record() == {
+        "executable_sha256": _sha(tokenizer), "llama_cpp_commit": "a" * 40,
+        "model_sha256": _sha(configured.model.path),
+        "invocation": "--model <GGUF> --stdin --show-count --no-bos",
+        "tokenizer_identity": "llama-tokenize:" + "a" * 40 + ":no-bos-stdin-show-count-v1",
+    }
 
 
 def test_profile_serialization_and_resolved_argv_are_deterministic(tmp_path: Path) -> None:
