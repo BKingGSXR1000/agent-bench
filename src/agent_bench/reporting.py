@@ -35,6 +35,7 @@ from agent_bench.matrix import expand_experiment
 from agent_bench.metrics_storage import verify_metrics_artifact
 from agent_bench.models import RunDefinition, canonical_sha256
 from agent_bench.preservation import verify_artifact
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter
 from agent_bench.result_store import verify_published_result
 from agent_bench.timing_provenance_storage import verify_timing_provenance_artifact
 
@@ -242,6 +243,7 @@ def build_unified_report(
     experiment_outputs: list[Path], *, output: Path,
     experiment_definitions: list[Path] | None = None,
     reference_profile: str | None = None, include_all_pairs: bool = False,
+    reasoning_tokenizer: LlamaTokenizeCounter | None = None,
 ) -> ReportBuild:
     """Build one rich, sealed report from compatible immutable experiment roots.
 
@@ -264,7 +266,10 @@ def build_unified_report(
     from agent_bench.comparison import _compatibility, _pairs, _read_root, _summaries
 
     comparison_inputs = [
-        _read_root(root, experiment_definitions[index] if experiment_definitions else None)
+        _read_root(
+            root, experiment_definitions[index] if experiment_definitions else None,
+            reasoning_tokenizer,
+        )
         for index, root in enumerate(sources)
     ]
     compatibility = _compatibility(comparison_inputs)

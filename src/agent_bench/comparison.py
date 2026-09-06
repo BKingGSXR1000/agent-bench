@@ -25,6 +25,7 @@ from agent_bench.metrics import calculate_run_metrics
 from agent_bench.metrics_storage import verify_metrics_artifact
 from agent_bench.models import canonical_sha256
 from agent_bench.preservation import verify_artifact
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter
 from agent_bench.reporting import ReportError, quantile_type7, verify_report
 from agent_bench.result_store import verify_published_result
 from agent_bench.runner import RunManifest
@@ -66,10 +67,22 @@ METRICS = (
     "functional.failed_test_count",
 )
 
+# These fields were added after some sealed metrics-v1 records had already
+# been produced.  A comparison is a derived, read-only consumer, so it can
+# calculate them from the integrity-linked artifact when they are absent.
+# ``calculate_run_metrics`` preserves the exact-tokenizer boundary: token
+# quantities which the sealed evidence cannot support remain unavailable.
+_RAW_EVIDENCE_FALLBACK_METRICS = frozenset(
+    path for path in METRICS
+    if path.startswith(("behavior.", "reasoning."))
+    or path == "derived.reasoning_to_output_ratio.value"
+)
+
 
 def build_comparison(
     roots: list[Path], *, output: Path, definitions: list[Path] | None = None,
     reference_profile: str | None = None, include_all_pairs: bool = False,
+    reasoning_tokenizer: LlamaTokenizeCounter | None = None,
 ) -> Path:
     """Build a sealed derived comparison without modifying source roots.
 
@@ -90,7 +103,7 @@ def build_comparison(
     if target.exists():
         raise ComparisonError(f"comparison destination already exists: {target}")
     inputs = [
-        _read_root(root, definitions[index] if definitions else None)
+        _read_root(root, definitions[index] if definitions else None, reasoning_tokenizer)
         for index, root in enumerate(sources)
     ]
     compatibility = _compatibility(inputs)
@@ -150,7 +163,10 @@ def build_comparison(
     return target
 
 
-def _read_root(root: Path, explicit_definition: Path | None) -> dict[str, Any]:
+def _read_root(
+    root: Path, explicit_definition: Path | None,
+    reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+) -> dict[str, Any]:
     try:
         state = ExperimentState.model_validate_json((root / "experiment-state.json").read_bytes())
     except Exception as exc:
@@ -163,8 +179,10 @@ def _read_root(root: Path, explicit_definition: Path | None) -> dict[str, Any]:
                 f"no immutable experiment definition or verified historical report is available for {state.experiment_id}; "
                 "supply --experiment-definition once per root"
             )
-        return _read_legacy_root(root, state, legacy)
-    return _read_definition_root(root, state, definition)
+        if reasoning_tokenizer is None:
+            return _read_legacy_root(root, state, legacy)
+        return _read_legacy_root(root, state, legacy, reasoning_tokenizer)
+    return _read_definition_root(root, state, definition, reasoning_tokenizer)
 
 
 def _resolve_definition(state: ExperimentState, explicit: Path | None) -> Any | None:
@@ -194,7 +212,10 @@ def _resolve_definition(state: ExperimentState, explicit: Path | None) -> Any | 
     return matches[0] if matches else None
 
 
-def _read_definition_root(root: Path, state: ExperimentState, definition: Any) -> dict[str, Any]:
+def _read_definition_root(
+    root: Path, state: ExperimentState, definition: Any,
+    reasoning_tokenizer: LlamaTokenizeCounter | None,
+) -> dict[str, Any]:
     planned = {item.run_id: item for item in expand_experiment(definition)}
     profiles = {item.profile_id: item for item in definition.harness_profiles}
     harnesses = {item.harness_id: item for item in definition.harnesses}
@@ -213,7 +234,9 @@ def _read_definition_root(root: Path, state: ExperimentState, definition: Any) -
         stored = verify_metrics_artifact(root / "analysis" / run.run_id / "metrics-v1")
         context = verify_context_analysis_artifact(root / "analysis" / run.run_id / "context-analysis-v2")
         _verify_analysis_links(artifact, stored, context, run.run_id)
-        values, provenance = _metric_values(stored.metrics, artifact)
+        values, provenance = _metric_values(
+            stored.metrics, artifact, reasoning_tokenizer=reasoning_tokenizer,
+        )
         functional = _functional_values(root, artifact, run)
         values.update(functional["metrics"]); provenance.update(functional["provenance"])
         rows.append({
@@ -270,7 +293,10 @@ def _legacy_report_presentation(root: Path, state: ExperimentState) -> dict[str,
     return None
 
 
-def _read_legacy_root(root: Path, state: ExperimentState, presentation: dict[str, Any]) -> dict[str, Any]:
+def _read_legacy_root(
+    root: Path, state: ExperimentState, presentation: dict[str, Any],
+    reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+) -> dict[str, Any]:
     """Reconstruct comparison facts from a verified historic derived report.
 
     The report supplies only structured labels/identity values.  Every raw run,
@@ -310,7 +336,9 @@ def _read_legacy_root(root: Path, state: ExperimentState, presentation: dict[str
         stored = verify_metrics_artifact(root / "analysis" / progress.run_id / "metrics-v1")
         context = verify_context_analysis_artifact(root / "analysis" / progress.run_id / "context-analysis-v2")
         _verify_analysis_links(artifact, stored, context, progress.run_id)
-        values, provenance = _metric_values(stored.metrics, artifact)
+        values, provenance = _metric_values(
+            stored.metrics, artifact, reasoning_tokenizer=reasoning_tokenizer,
+        )
         settings = profile.get("settings") if isinstance(profile.get("settings"), dict) else {}
         rows.append({
             "experiment_id": state.experiment_id, "run_id": progress.run_id,
@@ -405,15 +433,19 @@ def _functional_values(root: Path, artifact: Path, run: Any) -> dict[str, Any]:
     }
 
 
-def _metric_values(metrics: Any, artifact: Path) -> tuple[dict[str, float | int | None], dict[str, str]]:
+def _metric_values(
+    metrics: Any, artifact: Path, *, reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+) -> tuple[dict[str, float | int | None], dict[str, str]]:
     dumped = metrics.model_dump(mode="json")
     recalculated: dict[str, Any] | None = None
     values: dict[str, float | int | None] = {}
     provenance: dict[str, str] = {}
     for path in METRICS:
         value = _path(dumped, path)
-        if value is None and path.startswith("behavior."):
-            recalculated = recalculated or calculate_run_metrics(artifact).model_dump(mode="json")
+        if value is None and path in _RAW_EVIDENCE_FALLBACK_METRICS:
+            recalculated = recalculated or calculate_run_metrics(
+                artifact, reasoning_tokenizer=reasoning_tokenizer,
+            ).model_dump(mode="json")
             value = _path(recalculated, path)
             provenance[path] = "recalculated_from_raw_evidence" if value is not None else "unavailable"
         else:
