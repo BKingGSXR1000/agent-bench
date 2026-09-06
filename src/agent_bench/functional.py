@@ -25,9 +25,29 @@ from agent_bench.subject import load_frozen_subject, materialize_baseline
 
 FUNCTIONAL_SCHEMA_VERSION = "1.0.0"
 
+# Corrected evaluators are explicit, versioned replacements for historical
+# scenarios. They retain the semantic task ID so they can assess a sealed run
+# without changing its prompt or task identity.
+_V2_SCENARIO_FILENAMES = {
+    "task-priority-v1": "task-priority-v2.yaml",
+    "combined-filtering-v1": "combined-filtering-v2.yaml",
+    "multi-project-migration-v1": "multi-project-migration-v2.yaml",
+}
+
 
 class FunctionalValidationError(RuntimeError):
     """Raised for malformed scenarios or validation infrastructure failures."""
+
+
+def resolve_v2_scenario(scenario_id: str) -> Path:
+    """Return the checked-in corrected evaluator for a historical scenario."""
+    try:
+        filename = _V2_SCENARIO_FILENAMES[scenario_id]
+    except KeyError as exc:
+        raise FunctionalValidationError(
+            f"no corrected v2 evaluator is registered for {scenario_id}"
+        ) from exc
+    return Path(__file__).parents[2] / "functional" / "scenarios" / filename
 
 
 class FunctionalTestOutcome(BaseModel):

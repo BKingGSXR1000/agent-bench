@@ -7,7 +7,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from agent_bench.cli import app
-from agent_bench.functional import baseline_check, load_functional_scenario, self_validate
+from agent_bench.functional import baseline_check, load_functional_scenario, resolve_v2_scenario, self_validate
 from agent_bench.functional_suite import load_functional_suite, self_check_suite
 
 
@@ -16,7 +16,10 @@ SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v1.yaml"
 MEDIUM_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "combined-filtering-v1.yaml"
 COMPLEX_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "multi-project-migration-v1.yaml"
 V2_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v2.yaml"
+MEDIUM_V2_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "combined-filtering-v2.yaml"
+COMPLEX_V2_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "multi-project-migration-v2.yaml"
 SUITE_PATH = ROOT / "functional" / "suites" / "taskboard-functional-v1.yaml"
+V2_SUITE_PATH = ROOT / "functional" / "suites" / "taskboard-functional-v2.yaml"
 
 
 def _source_fingerprint(root: Path) -> dict[str, str]:
@@ -131,6 +134,44 @@ def test_multi_project_self_check_proves_complex_targeted_rejections(tmp_path: P
     assert results["known-bad-migration"].hard_gates["migration_integrity"] is False
     assert results["known-bad-import-atomicity"].hard_gates["import_atomicity"] is False
     assert results["known-bad-filter-regression"].hard_gates["baseline_regressions"] is False
+
+
+def test_combined_filtering_v2_keeps_only_frozen_baseline_checks_automated(tmp_path: Path) -> None:
+    scenario = load_functional_scenario(MEDIUM_V2_SCENARIO_PATH)
+    results = {result.run_id.removeprefix("self-"): result for result in self_validate(scenario, tmp_path / "medium-v2")}
+    good = results["known-good"]
+    assert scenario.scenario_id == "combined-filtering-v1"
+    assert scenario.validator_version == "2.0.0"
+    assert good.passed_tests == 8 and good.failed_tests == 0
+    assert good.manual_review_required_tests == 22 and good.hard_gate_pass is True
+    validator = scenario.validator.read_text(encoding="utf-8")
+    assert ".setFilters" not in validator and "clearFilters" not in validator
+    assert "Status filter" not in validator and "Priority filter" not in validator
+    assert results["known-bad-delete-regression"].failed_tests == 1
+
+
+def test_multi_project_v2_keeps_frozen_filtering_behavior_automated(tmp_path: Path) -> None:
+    scenario = load_functional_scenario(COMPLEX_V2_SCENARIO_PATH)
+    results = {result.run_id.removeprefix("self-"): result for result in self_validate(scenario, tmp_path / "complex-v2")}
+    good = results["known-good"]
+    assert scenario.scenario_id == "multi-project-migration-v1"
+    assert good.passed_tests == 11 and good.failed_tests == 0
+    assert good.manual_review_required_tests == 22 and good.hard_gate_pass is True
+    assert results["known-bad-filter-regression"].hard_gate_pass is False
+    validator = scenario.validator.read_text(encoding="utf-8")
+    assert "schema_version" not in validator and "project-inbox" not in validator
+    assert "createProject" not in validator and "exportJson" not in validator
+
+
+def test_corrected_evaluator_registry_maps_historical_task_ids_explicitly() -> None:
+    assert resolve_v2_scenario("combined-filtering-v1") == MEDIUM_V2_SCENARIO_PATH
+    assert resolve_v2_scenario("multi-project-migration-v1") == COMPLEX_V2_SCENARIO_PATH
+
+
+def test_complex_v2_suite_seals_the_corrected_complex_evaluator(tmp_path: Path) -> None:
+    payload = self_check_suite(load_functional_suite(V2_SUITE_PATH), tmp_path / "complex-v2-suite")
+    assert payload["suite_status"] == "PASS"
+    assert payload["scenarios_valid"] == payload["scenarios_total"] == 1
 
 
 def test_taskboard_functional_suite_checks_all_baselines_prompts_leaks_and_schema(tmp_path: Path) -> None:

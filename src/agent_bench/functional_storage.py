@@ -226,9 +226,13 @@ def _status(result: FunctionalValidationResult) -> Literal["pass", "fail", "erro
         return "error"
     if result.unavailable_tests:
         return "unavailable"
+    # Manual evidence is never a waiver for an observed deterministic failure.
+    # In particular, frozen baseline regressions remain hard automated FAILs.
+    if result.failed_tests or not result.hard_gate_pass:
+        return "fail"
     if result.manual_review_required_tests:
         return "needs_review"
-    return "pass" if result.hard_gate_pass else "fail"
+    return "pass"
 
 
 def _sha(path: Path) -> str:

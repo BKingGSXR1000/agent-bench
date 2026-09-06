@@ -1,0 +1,30 @@
+schema_version: 1.0.0
+suite_id: taskboard-functional-v2
+suite_version: 2.0.0
+scenarios:
+  - scenario_id: multi-project-migration-v1
+    tier: complex
+    scenario_definition: ../scenarios/multi-project-migration-v2.yaml
+    scenario_definition_sha256: 9b57ffedc5e0398f270178012067f4a8620b822af4e6d9a9b5d0a7f41c2f8673
+    subject_id: taskboard-filtering-v1
+    baseline_commit: cce6673c6bcddd8083f5a2e94434d7c4d9a7f512
+    baseline_tree: 83fda66cd98618c46441ca6a6948ac8deb6b0828
+    baseline_bundle_sha256: 598ada0e9d3376ea28b093cdf19869af8e6627d1635a93cee6857f127e5df685
+    validator_sha256: fa19a89a3c250f19a00b699035ff9009bd2ba1cb80e2f83fe63549d9b13b53f2
+    prompt_manifest: ../../subjects/taskboard-filtering-v1/prompts/manifest.yaml
+    prompts:
+      vague: {path: ../../subjects/taskboard-filtering-v1/prompts/multi-project-migration-v1-vague.txt, sha256: d55aee91f6aafdd91849ed5991adbbff97c4e4f48d2462c05d456c7c7f6f28eb}
+      normal: {path: ../../subjects/taskboard-filtering-v1/prompts/multi-project-migration-v1-normal.txt, sha256: fecf4916dba178edc126dcf7b11a9a6ef75a323543b9f742ad1d49de2fddc7cf}
+      precise: {path: ../../subjects/taskboard-filtering-v1/prompts/multi-project-migration-v1-precise.txt, sha256: 2f377dd6400090a403a96f8d682cae335d5d2a807783b532c473390e383142ad}
+    expected_fixture_vector_sha256:
+      untouched-baseline: c4987338a2ecbb66b77ef7bc2f1af5fb4eef901d2f6f12e090890aba8b38d9fa
+      known-good: c4987338a2ecbb66b77ef7bc2f1af5fb4eef901d2f6f12e090890aba8b38d9fa
+      known-bad-isolation: c4987338a2ecbb66b77ef7bc2f1af5fb4eef901d2f6f12e090890aba8b38d9fa
+      known-bad-migration: c4987338a2ecbb66b77ef7bc2f1af5fb4eef901d2f6f12e090890aba8b38d9fa
+      known-bad-import-atomicity: c4987338a2ecbb66b77ef7bc2f1af5fb4eef901d2f6f12e090890aba8b38d9fa
+      known-bad-filter-regression: 7c97f15aecb7fe314f2f5c6095de7d5154e0fcb0541f11d5d23cc86d6d359a14
+    complexity:
+      source_module_count: 5
+      source_line_count: 15
+      baseline_features: [task CRUD, priorities, title description search, AND status priority filtering, persisted filters]
+      conceptual_change_areas: [project behavior, migration behavior, import export behavior, implementation-neutral manual verification]
