@@ -86,6 +86,7 @@ from agent_bench.functional import (
     FunctionalValidationError,
     baseline_check,
     load_functional_scenario,
+    resolve_v2_scenario,
     self_validate,
     validate_workspace,
 )
@@ -287,9 +288,9 @@ def functional_revalidate(
             raise ValueError("run_id is unknown or not completed")
         definition = load_experiment(experiment_definition)
         run = next(item for item in expand_experiment(definition) if item.run_id == run_id)
-        if run.functional_scenario is None or run.functional_scenario.scenario_id != "task-priority-v1":
-            raise ValueError("functional validator v2 is currently available only for task-priority-v1")
-        scenario_path = Path("functional/scenarios/task-priority-v2.yaml").resolve()
+        if run.functional_scenario is None:
+            raise ValueError("run has no functional scenario to revalidate")
+        scenario_path = resolve_v2_scenario(run.functional_scenario.scenario_id)
         scenario = load_functional_scenario(scenario_path)
         association = run.functional_scenario.model_copy(update={
             "scenario_definition": scenario_path,

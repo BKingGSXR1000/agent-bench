@@ -4,6 +4,19 @@ M12 adds a deterministic, headless functional dimension. It is intentionally
 separate from timing, tokens, tool calls, reasoning, and manual review: it does
 not generate an efficiency score.
 
+## Behavior-first evaluator policy
+
+Functional validators test task-required behavior, not an evaluator-preferred
+internal architecture. A feature must not fail merely because it uses a
+different internal API, DOM structure, storage schema, serialization layout,
+or naming convention, unless that contract was explicitly required by the
+prompt or was already a frozen public baseline contract.
+
+When the current headless Node evaluator cannot verify behavior without making
+one of those assumptions, it emits `manual_review_required`; it must not
+invent an implementation-specific automated FAIL. Manual adjudication remains
+append-only and separate from automated evidence.
+
 ## v2 revalidation and local adjudication
 
 `task-priority-v2` corrects an invalid v1 implementation requirement: priority
@@ -12,6 +25,15 @@ creation, Low-to-High editing, state, and reload persistence. The
 implementation-neutral visual criteria (creation control and per-task display)
 are emitted as `manual_review_required`, yielding `needs_review`, never a
 false automated failure.
+
+`combined-filtering-v2` retains the same `combined-filtering-v1` task ID and
+its eight frozen baseline regressions as hard automated checks. Its remaining
+22 search/filter interaction requirements are manual-review evidence: this
+evaluator has no implementation-neutral real-browser interaction layer.
+`multi-project-migration-v2` similarly retains 11 frozen filtering-baseline
+checks and marks its 22 project, migration, and import/export requirements for
+manual review. The v1 validators and their sealed artifacts are immutable
+historical audit evidence; they are not replaced or rewritten.
 
 Existing sealed snapshots can be assessed without rerunning an agent, model,
 or backend:
@@ -28,6 +50,12 @@ manual PASS, compatible v2 evidence, then v1 evidence. The report server's
 one-click **Mark result OK** appends
 `EXPERIMENT_OUTPUT/adjudications/RUN_ID/revision-###.json`; Undo appends a
 `revoked` revision. Neither action mutates automated evidence.
+
+The revalidation registry maps `task-priority-v1`, `combined-filtering-v1`,
+and `multi-project-migration-v1` to their corrected v2 evaluator definitions.
+It restores only the sealed source snapshot and starts no harness, model, or
+backend. Report precedence is active manual PASS, compatible automated v2,
+then automated v1.
 
 ## Scenario anatomy
 
@@ -56,6 +84,11 @@ project retention, v1-to-v2 persistence migration, and atomic import/export
 are measured without reimplementing priority or filters. Its reference spans
 project-state, migration, project-scope, import/export, filtering, and board
 state modules; solutions remain free to choose another architecture.
+
+Before any Complex benchmark execution, use the future
+`experiments/taskboard-functional-complex-v2.yaml` definition and its v2
+association. `functional/experiments/taskboard-functional-smoke-v2.yaml`
+provides the matching read-only normal/R001 smoke plan.
 
 ## Lifecycle
 
@@ -125,9 +158,12 @@ but all three are bound to the same scenario ID and hidden acceptance contract.
 
 The versioned JSON result records scenario/run identity, validator version and
 digest, frozen baseline identity, timestamp, individual outcomes, category
-counts, numerical score, hard-gate outcomes, and provenance. Scores are simply
-passed tests over all available tests. `hard_gate_pass` is separate: a numerical
-score never masks a critical failure. Infrastructure absence is recorded as
+counts, numerical score, hard-gate outcomes, and provenance. Historical v1
+scores remain audit data. For v2 evidence containing manual requirements, the
+report presents automated passed/failed/manual counts instead of treating
+passed-over-total as a correctness percentage. `hard_gate_pass` is separate: a
+numerical score never masks a critical failure, and a manual requirement never
+masks an observed automated failure. Infrastructure absence is recorded as
 `unavailable`; malformed/failed validation infrastructure is `error`; neither
 is silently reclassified as an ordinary functional failure.
 

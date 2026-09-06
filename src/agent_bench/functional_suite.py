@@ -239,7 +239,7 @@ def _verify_result_schema(results: tuple[object, ...]) -> None:
         if set(getattr(value, "baseline_regression")) != expected_count_keys or not isinstance(getattr(value, "hard_gates"), dict) or not isinstance(getattr(value, "hard_gate_pass"), bool):
             raise FunctionalSuiteError("functional result summary representation mismatch")
         for test in getattr(value, "tests"):
-            if test.outcome not in {"passed", "failed", "error", "unavailable"}:
+            if test.outcome not in {"passed", "failed", "error", "unavailable", "manual_review_required"}:
                 raise FunctionalSuiteError("functional result status vocabulary mismatch")
 
 

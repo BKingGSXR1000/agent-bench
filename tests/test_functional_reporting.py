@@ -69,6 +69,21 @@ def test_disposable_smoke_plan_is_exactly_nine_normal_r001_seed_1001_runs() -> N
     assert {run["generation_seed"] for member in payload["members"] for run in member["runs"]} == {1001}
 
 
+def test_v2_complex_smoke_plan_selects_exactly_three_normal_r001_runs() -> None:
+    result = CliRunner().invoke(
+        app,
+        ["functional", "plan", str(ROOT / "functional/experiments/taskboard-functional-smoke-v2.yaml")],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    complex_member = next(member for member in payload["members"] if member["tier"] == "complex")
+    assert payload["total_runs"] == 9
+    assert len(complex_member["runs"]) == 3
+    assert {run["harness_id"] for run in complex_member["runs"]} == {"hermes", "opencode", "pi"}
+    assert {run["prompt_id"] for run in complex_member["runs"]} == {"multi-project-migration-v1-normal"}
+    assert {run["repetition_index"] for run in complex_member["runs"]} == {1}
+
+
 def test_reporting_keeps_legacy_not_applicable_distinct_from_fail_and_validator_faults() -> None:
     fields = {field.name for field in SCHEMAS["runs"]}
     assert {"functional_validation_status", "functional_score_percent", "hard_gate_pass", "baseline_regression_count", "functional_tier", "failed_functional_test_ids"} <= fields
@@ -119,3 +134,28 @@ def test_functional_report_projection_keeps_all_validator_states_distinct() -> N
     assert error["functional_score_percent"] is None and error["functional_validation_status"] == "error"
     assert unavailable["functional_score_percent"] is None and unavailable["functional_validation_status"] == "unavailable"
     assert _functional_empty("not_applicable")["functional_validation_status"] == "not_applicable"
+
+
+def test_v2_review_projection_keeps_automated_counts_without_a_score() -> None:
+    tests = tuple([SimpleNamespace(test_id=f"pass-{index}", outcome="passed") for index in range(8)] + [
+        SimpleNamespace(test_id=f"manual-{index}", outcome="manual_review_required") for index in range(22)
+    ])
+    record = SimpleNamespace(
+        validation_status="needs_review", acceptance_score_numerator=8, acceptance_score_denominator=30,
+        scenario=SimpleNamespace(scenario_id="combined-filtering-v1", tier="medium"),
+        functional_result=SimpleNamespace(score_percent=26.666667, hard_gate_pass=True, baseline_regression={"failed": 0}, failed_tests=0, passed_tests=8, tests=tests),
+    )
+    fields = _functional_fields_from_record(record)
+    assert fields["functional_score_percent"] is None
+    assert fields["hard_gate_pass"] is True
+    assert fields["automated_functional_passed_count"] == 8
+    assert fields["automated_functional_failed_count"] == 0
+    assert fields["manual_review_required_count"] == 22
+
+
+def test_html_v2_review_card_never_renders_a_fractional_correctness_score() -> None:
+    presentation = {"generator": {}, "experiment_id": "fixture", "definition_digest": "d", "expansion_digest": "e", "completion": {}, "definition": {"prompts": [], "profiles": [], "fixed_environment": {}}, "summary_environment": {}, "runs": [], "summaries": [], "curves": [], "markers": [], "failures": [], "details": {}, "data_files": []}
+    html = _html_report({"experiment_id": "fixture"}, presentation)
+    assert "Automated v2" in html
+    assert "Automated hard gates" in html
+    assert "Functional PASS — manually verified" in html

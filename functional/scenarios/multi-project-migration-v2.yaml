@@ -1,0 +1,68 @@
+schema_version: 1.0.0
+scenario_id: multi-project-migration-v1
+subject_root: ../../subjects/taskboard-filtering-v1
+validator: ../validators/multi-project-migration-v2.mjs
+validator_version: 2.0.0
+baseline_strategy: derived-filtering-baseline
+baseline_strategy_rationale: Frozen filtering behavior remains an automated regression contract; new project, migration, and import/export behavior is manual evidence until it can be tested without requiring a particular state shape or UI architecture.
+expected_baseline_outcomes: &v2
+  baseline-initializes: passed
+  baseline-create: passed
+  baseline-edit: passed
+  baseline-delete: passed
+  baseline-status: passed
+  baseline-priority: passed
+  baseline-combined-filtering: passed
+  baseline-filter-persistence: passed
+  baseline-reload: passed
+  project-create: manual_review_required
+  project-rename: manual_review_required
+  project-switch-persist: manual_review_required
+  project-task-belongs-stable-id: manual_review_required
+  project-isolation: manual_review_required
+  project-cross-mutation: manual_review_required
+  archive-project-preserves-data: manual_review_required
+  archive-selection: manual_review_required
+  migration-empty: manual_review_required
+  migration-populated-preserves: manual_review_required
+  migration-reload-no-duplicate: manual_review_required
+  migration-already-new: manual_review_required
+  export-includes-state: manual_review_required
+  import-roundtrip: manual_review_required
+  import-malformed-rejected: manual_review_required
+  import-invalid-structure: manual_review_required
+  import-invalid-reference: manual_review_required
+  import-failed-atomic: manual_review_required
+  export-archived-survives: manual_review_required
+  interaction-filter-project-isolation: manual_review_required
+  interaction-switch-with-filters: manual_review_required
+  interaction-edit-visibility: passed
+  interaction-delete-filtered: passed
+  interaction-migration-create-project: manual_review_required
+hard_gates:
+  baseline_regressions: [baseline-initializes, baseline-create, baseline-edit, baseline-delete, baseline-status, baseline-priority, baseline-combined-filtering, baseline-filter-persistence, baseline-reload, interaction-edit-visibility, interaction-delete-filtered]
+self_validation:
+  untouched-baseline:
+    overlays: []
+    expected: {outcomes: *v2, hard_gate_pass: true, score_numerator: 11, score_denominator: 33}
+  known-good:
+    overlays: [../references/multi-project-migration-v1/known-good]
+    expected: {outcomes: *v2, hard_gate_pass: true, score_numerator: 11, score_denominator: 33}
+  known-bad-isolation:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-isolation]
+    expected: {outcomes: *v2, hard_gate_pass: true, score_numerator: 11, score_denominator: 33}
+  known-bad-migration:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-migration]
+    expected: {outcomes: *v2, hard_gate_pass: true, score_numerator: 11, score_denominator: 33}
+  known-bad-import-atomicity:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-import-atomicity]
+    expected: {outcomes: *v2, hard_gate_pass: true, score_numerator: 11, score_denominator: 33}
+  known-bad-filter-regression:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-filter-regression]
+    expected:
+      outcomes:
+        <<: *v2
+        baseline-combined-filtering: failed
+      hard_gate_pass: false
+      score_numerator: 10
+      score_denominator: 33

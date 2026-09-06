@@ -16,6 +16,7 @@ from agent_bench.executor import ExperimentExecutor, controlled_dispatch
 from agent_bench.functional import FunctionalBaselineHealth, load_functional_scenario
 from agent_bench.functional_storage import (
     FunctionalValidationStorageError,
+    _status,
     validate_and_store_functional_artifact,
     verify_functional_validation_artifact,
 )
@@ -123,6 +124,34 @@ def test_validator_error_is_sealed_without_an_acceptance_score(
     assert stored.result.acceptance_score_numerator is None
     assert stored.result.acceptance_score_denominator is None
     assert (sealed.artifact_path / "source/source.tar").is_file()
+
+
+def test_automated_failure_is_not_masked_by_manual_review_requirements() -> None:
+    from agent_bench.functional import FunctionalTestOutcome, FunctionalValidationResult
+
+    result = FunctionalValidationResult.model_construct(
+        error_tests=0, unavailable_tests=0, failed_tests=1, hard_gate_pass=False,
+        manual_review_required_tests=22,
+    )
+    assert _status(result) == "fail"
+
+
+def test_v2_analysis_artifact_is_separate_and_create_only(tmp_path: Path) -> None:
+    scenario = load_functional_scenario(SCENARIO_PATH)
+    sealed, association = _run(tmp_path, "functional-v2-artifact", scenario.self_validation["known-good"].overlays)
+    stored = validate_and_store_functional_artifact(
+        source_artifact=sealed.artifact_path, output_root=tmp_path / "analysis",
+        run_id="functional-v2-artifact", experiment_id="functional-fixture", association=association,
+        validator_version_label="v2",
+    )
+    assert stored.root == tmp_path / "analysis/functional-v2-artifact/functional-validation-v2"
+    assert stored.result.schema_version == "2.0.0"
+    with pytest.raises(FunctionalValidationStorageError, match="already exists"):
+        validate_and_store_functional_artifact(
+            source_artifact=sealed.artifact_path, output_root=tmp_path / "analysis",
+            run_id="functional-v2-artifact", experiment_id="functional-fixture", association=association,
+            validator_version_label="v2",
+        )
 
 
 def _functional_experiment(association: FunctionalScenarioAssociation):

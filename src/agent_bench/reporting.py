@@ -164,6 +164,9 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("baseline_regressions", pa.bool_()),
         ("failed_functional_test_count", pa.int64()),
         ("failed_functional_test_ids", pa.string()),
+        ("automated_functional_passed_count", pa.int64()),
+        ("automated_functional_failed_count", pa.int64()),
+        ("manual_review_required_count", pa.int64()),
         ("functional_scenario_id", pa.string()),
         ("functional_tier", pa.string()),
         ("self_reported_incomplete", pa.bool_()),
@@ -1005,12 +1008,18 @@ def _functional_report_fields(source: Path, artifact_root: Path, run_id: str, de
     v2 = verified("functional-validation-v2")
     if v1 is None:
         raise ReportError("functional validation v1 artifact is missing")
-    fields = _functional_fields_from_record(v2 or v1)
+    v2_compatible = v2 is not None and (
+        v2.scenario.scenario_id == v1.scenario.scenario_id
+        and v2.prompt_id == v1.prompt_id
+        and v2.prompt_sha256 == v1.prompt_sha256
+        and v2.frozen_baseline == v1.frozen_baseline
+    )
+    fields = _functional_fields_from_record(v2 if v2_compatible else v1)
     fields.update({
         "automated_functional_v1_status": v1.validation_status,
-        "automated_functional_v2_status": v2.validation_status if v2 else None,
+        "automated_functional_v2_status": v2.validation_status if v2_compatible else None,
         "manual_functional_status": None,
-        "functional_status_provenance": "automated functional validation v2" if v2 else "automated functional validation v1",
+        "functional_status_provenance": "automated functional validation v2" if v2_compatible else "automated functional validation v1",
     })
     try:
         manual = active_adjudication(source, run_id)
@@ -1029,16 +1038,24 @@ def _functional_report_fields(source: Path, artifact_root: Path, run_id: str, de
 def _functional_fields_from_record(record: Any) -> dict[str, Any]:
     """Project one verified validator record into compact report fields."""
     result = record.functional_result
+    passed_count = sum(test.outcome == "passed" for test in result.tests)
+    manual_count = sum(test.outcome == "manual_review_required" for test in result.tests)
     return {
         "functional_validation_status": record.validation_status,
         "functional_score_numerator": record.acceptance_score_numerator,
         "functional_score_denominator": record.acceptance_score_denominator,
+        # A manual-review-heavy v2 result is not a fractional correctness
+        # score. The raw artifact retains its historical pass/total count, but
+        # presentation uses the explicit automated/manual split below.
         "functional_score_percent": result.score_percent if record.validation_status in {"pass", "fail"} else None,
-        "hard_gate_pass": result.hard_gate_pass if record.validation_status in {"pass", "fail"} else None,
+        "hard_gate_pass": result.hard_gate_pass if record.validation_status in {"pass", "fail", "needs_review"} else None,
         "baseline_regression_count": result.baseline_regression["failed"],
         "baseline_regressions": result.baseline_regression["failed"] > 0,
         "failed_functional_test_count": result.failed_tests,
         "failed_functional_test_ids": ", ".join(test.test_id for test in result.tests if test.outcome == "failed") or None,
+        "automated_functional_passed_count": passed_count,
+        "automated_functional_failed_count": result.failed_tests,
+        "manual_review_required_count": manual_count,
         "functional_scenario_id": record.scenario.scenario_id,
         "functional_tier": record.scenario.tier,
     }
@@ -1052,6 +1069,9 @@ def _functional_empty(status: str) -> dict[str, Any]:
         "baseline_regression_count": None, "baseline_regressions": None,
         "failed_functional_test_count": None,
         "failed_functional_test_ids": None,
+        "automated_functional_passed_count": None,
+        "automated_functional_failed_count": None,
+        "manual_review_required_count": None,
         "automated_functional_v1_status": None,
         "automated_functional_v2_status": None,
         "manual_functional_status": None,
@@ -1547,7 +1567,7 @@ def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
   $('kpis').innerHTML=kpis.map(([l,v])=>`<div class="kpi"><span class="v">${val(v)}</span><span class="l">${esc(l)}</span></div>`).join('');
   const done=completed(); $('executed-summary').textContent=`Show individual runs (${done.length})`;
   setAnalysisPopulation();
-  function renderFunctional(){const rows=d.runs.filter(r=>r.state==='completed'&&r.evidence_status==='verified'&&r.functional_validation_status&&r.functional_validation_status!=='not_applicable');const section=$('functional'),nav=$('functional-nav');if(!rows.length){section.hidden=true;nav.hidden=true;return}section.hidden=false;nav.hidden=false;$('functional-results').innerHTML=rows.map(r=>{const status=String(r.functional_validation_status||'unavailable').toUpperCase(),gate=r.hard_gate_pass===true?'PASS':r.hard_gate_pass===false?'FAIL':'UNAVAILABLE',score=r.functional_score_numerator!==null&&r.functional_score_denominator!==null?`${num(r.functional_score_numerator)} / ${num(r.functional_score_denominator)} (${num(r.functional_score_percent)}%)`:missing;return `<article class="card" data-run="${esc(r.run_id)}"><h3 class="${status==='PASS'?'ok':status==='FAIL'||status==='ERROR'?'bad':'warn'}">Functional ${esc(status)}</h3><p><strong>${esc(r.harness)} · ${esc(r.semantic_task)}</strong><br>${esc(r.functional_scenario_id||missing)} · tier ${esc(r.functional_tier||missing)}</p><p>Score: ${score}<br>Hard gate: <strong>${gate}</strong><br>Baseline regressions: ${num(r.baseline_regression_count)}<br>Failed functional tests: ${num(r.failed_functional_test_count)}</p><p class="mono muted">${esc(r.run_id)}</p></article>`}).join('');$('functional-results').querySelectorAll('[data-run]').forEach(e=>e.onclick=()=>openDetail(e.dataset.run))}renderFunctional();
+  function renderFunctional(){const rows=d.runs.filter(r=>r.state==='completed'&&r.evidence_status==='verified'&&r.functional_validation_status&&r.functional_validation_status!=='not_applicable');const section=$('functional'),nav=$('functional-nav');if(!rows.length){section.hidden=true;nav.hidden=true;return}section.hidden=false;nav.hidden=false;$('functional-results').innerHTML=rows.map(r=>{const status=String(r.functional_validation_status||'unavailable').toUpperCase(),gate=r.hard_gate_pass===true?'PASS':r.hard_gate_pass===false?'FAIL':'UNAVAILABLE',isV2Manual=Boolean(r.automated_functional_v2_status)&&Number(r.manual_review_required_count)>0,manualPass=r.manual_functional_status==='pass',counts=`Automated v2<br>Passed: ${num(r.automated_functional_passed_count)}<br>Failed: ${num(r.automated_functional_failed_count)}<br>${manualPass?'Manually verified':'Manual review required'}: ${num(r.manual_review_required_count)}`,legacyScore=r.functional_score_numerator!==null&&r.functional_score_denominator!==null?`${num(r.functional_score_numerator)} / ${num(r.functional_score_denominator)} (${num(r.functional_score_percent)}%)`:missing,summary=isV2Manual?`${counts}<br>Automated hard gates: <strong>${gate}</strong>`:`Score: ${legacyScore}<br>Hard gate: <strong>${gate}</strong><br>Baseline regressions: ${num(r.baseline_regression_count)}<br>Failed functional tests: ${num(r.failed_functional_test_count)}`,heading=manualPass?'Functional PASS — manually verified':`Functional ${status.replace('_',' ')}`;return `<article class="card" data-run="${esc(r.run_id)}"><h3 class="${status==='PASS'?'ok':status==='FAIL'||status==='ERROR'?'bad':'warn'}">${esc(heading)}</h3><p><strong>${esc(r.harness)} · ${esc(r.semantic_task)}</strong><br>${esc(r.functional_scenario_id||missing)} · tier ${esc(r.functional_tier||missing)}</p><p>${summary}</p><p class="mono muted">${esc(r.run_id)}</p></article>`}).join('');$('functional-results').querySelectorAll('[data-run]').forEach(e=>e.onclick=()=>openDetail(e.dataset.run))}renderFunctional();
   const taskNames=[...new Set((d.definition.prompts||[]).map(x=>x.semantic_task_id))], variants=[...new Set((d.definition.prompts||[]).map(x=>x.variant_label))];
   $('matrix-summary').innerHTML=`<div><h3>Matrix dimensions</h3>${kv({harnesses:(d.definition.harnesses||[]).map(x=>`${x.display_name} ${x.version}`).join(', '),profiles:(d.definition.profiles||[]).map(x=>`${x.profile_id} (${x.profile_version})`).join(', '),semantic_tasks:taskNames.join(', '),prompt_variants:variants.join(', '),repetitions:repetitionLabel,repetition_indices:d.definition.repetition_indices||null,ordering:d.definition.ordering?.mode,ordering_seed:d.definition.ordering?.seed,planned_rows:c.total})}</div><div><h3>Immutable baseline and run policy</h3>${kv({portable_baseline:d.definition.portable_baseline,run_limits:d.definition.run_limits,fixed_environment_id:env.fixed_environment_id,definition_source:d.definition.definition_source,backend_configuration_source:d.definition.backend_configuration_source,backend_configuration_sha256:d.definition.backend_configuration_sha256})}</div>`;
   $('fixed-config').innerHTML=`<p class="source">Sources: ${esc(d.definition.definition_source||'unavailable')}; ${esc(d.definition.backend_configuration_source||'unavailable')} (path values redacted).</p><div class="two"><div><h3>Model + template + backend identity</h3>${kv({model:config.model||model,chat_template:config.chat_template||model.gguf_metadata,executable:config.executable||backend,llama_cpp_commit:config.llama_cpp_commit||backend.commit,version:backend.version,hardware:config.gpu||hardware})}</div><div><h3>Server + generation (all configured values)</h3>${kv({server:config.server||env.server_parameters,sampling:config.sampling||env.generation,restart_policy:config.restart_policy||env.restart_policy,readiness_policy:env.readiness_policy,warmup:env.warmup})}</div></div>`;

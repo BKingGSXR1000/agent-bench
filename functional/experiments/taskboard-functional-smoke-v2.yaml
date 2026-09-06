@@ -1,0 +1,9 @@
+schema_version: 1.0.0
+suite_id: taskboard-functional-smoke-v2
+suite_version: 2.0.0
+disposable_output_root: runs/smoke/taskboard-functional-smoke-v2
+total_runs: 9
+members:
+  - {tier: easy, scenario_id: task-priority-v1, experiment_definition: ../../experiments/taskboard-functional-easy-v1.yaml, expected_runs: 3, selection: {harness_id: [hermes, opencode, pi], prompt_id: [task-priority-v1-normal], repetition_index: [1], generation_seed: [1001]}}
+  - {tier: medium, scenario_id: combined-filtering-v1, experiment_definition: ../../experiments/taskboard-functional-medium-v1.yaml, expected_runs: 3, selection: {harness_id: [hermes, opencode, pi], prompt_id: [combined-filtering-v1-normal], repetition_index: [1], generation_seed: [1001]}}
+  - {tier: complex, scenario_id: multi-project-migration-v1, experiment_definition: ../../experiments/taskboard-functional-complex-v2.yaml, expected_runs: 3, selection: {harness_id: [hermes, opencode, pi], prompt_id: [multi-project-migration-v1-normal], repetition_index: [1], generation_seed: [1001]}}
