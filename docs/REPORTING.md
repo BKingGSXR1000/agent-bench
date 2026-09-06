@@ -26,6 +26,33 @@ Every report records its schema/specification version, generator version, input 
 - Chart coordinates are stored as deterministic report data so different renderers can reproduce them.
 - Stable sorting uses experiment matrix position, then `run_id`, unless a chart specifies another order.
 
+### Completion integrity and primary performance analysis
+
+Reports keep three independent facts separate: objective technical termination,
+functional validation, and an optional model self-reported-incomplete signal.
+For experiments with functional validation, the default **Functionally correct
+only** analysis population requires verified completed evidence, functional
+`pass`, hard-gate `true`, a technically ordinary termination (`success` or the
+historically retained `no_changes`), and no detected model self-report that the
+task was incomplete. Timeout, process-killed, context/output-limit, backend,
+harness, preservation, precondition, malformed-output, and unknown technical
+terminations are excluded from that population.
+
+The shared dashboard control also offers **All completed runs** (diagnostic and
+explicitly labelled) and **Functional failures only** (diagnostic failure
+analysis, not a performance contest). Exact same-seed matching is performed
+only after this selection; an excluded peer excludes that exact pair and is not
+replaced by another seed, repetition, or prompt.
+
+Model self-report is conservative deterministic textual evidence from captured
+model/assistant responses only. It records explicit time, token, context,
+step/turn, or general-incomplete statements with an event reference and rule
+ID. It is advisory, not proof that a backend or harness resource limit occurred,
+and never changes `termination_class`. Historical non-functional reports retain
+their completed/verified behavior and state that statistics are not conditioned
+on functional correctness; absent historical self-report evidence remains
+unavailable.
+
 ## 3. Per-run report
 
 ### 3.1 Run summary

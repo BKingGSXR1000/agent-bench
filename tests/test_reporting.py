@@ -237,7 +237,7 @@ def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() ->
     assert "Show individual runs (${done.length})" in output
     assert "Pending / Planned" in output
     assert "individual only; no spread" in output
-    assert "median + Q1–Q3" in output
+    assert "Analysis population:" in output
     assert "Prompt variant" in output and "Repetition" in output
     assert "opencode-task-a-vague-1" in output
     assert "135" in output
@@ -299,9 +299,9 @@ def test_group_comparison_bars_have_local_numeric_sorting_after_filters() -> Non
     assert "if(am!==bm)return am?1:-1" in output
     assert "order==='ascending'?a-b:b-a" in output
     assert 'data-bar-category="${esc(r.group_key)}"' in output
-    # The chart summaries are rebuilt from currently filtered completed runs;
+    # The chart summaries are rebuilt from the shared selected population;
     # sorting never mutates the immutable d.runs input.
-    assert "completed().filter(matchesFilters)" in output
+    assert "analysisRows().filter(matchesFilters)" in output
     assert "barSorts[control.dataset.barSort]=control.value;comparison()" in output
     assert "<script src=" not in output and "cdn" not in output.lower()
 

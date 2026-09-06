@@ -33,6 +33,7 @@ from agent_bench.metric_models import (
     TokenMetrics,
     ToolCategoryCounts,
 )
+from agent_bench.completion_integrity import SELF_REPORT_METHOD, detect_model_self_reports
 from agent_bench.models import canonical_sha256
 from agent_bench.reasoning_blocks import extract_reasoning_blocks
 from agent_bench.reasoning_tokenizer import (
@@ -50,7 +51,7 @@ from agent_bench.preservation import (
 from agent_bench.runner import NORMALIZED_EVENTS_PATH, RAW_EVENTS_PATH, RUN_MANIFEST_PATH, RunManifest
 
 METRICS_CONFIGURATION = {
-    "version": "1.0.3",
+    "version": "1.0.4",
     "duration_aggregation": "sum_completed_correlated_intervals",
     "duplicate_arguments": "canonical-json-exact-v1",
     "path_normalization": "project-relative-posix-lexical-v1",
@@ -58,6 +59,7 @@ METRICS_CONFIGURATION = {
     "path_classifier": "agent-bench-path-classifier-v1",
     "tool_timing": "explicit-execution-boundary-only-v1",
     "response_behavior": "proxy-final-response-exact-v1",
+    "completion_integrity": SELF_REPORT_METHOD,
     "termination_precedence": [
         "precondition_failed",
         "preservation_failed",
@@ -210,6 +212,7 @@ def calculate_run_metrics(
     termination = _classify_termination(
         run_manifest, events, git_summary, git_result, raw_events
     )
+    completion_integrity = _calculate_completion_integrity(events, raw_events)
 
     input_identity = MetricsInputIdentity(
         artifact_manifest_sha256=reasoning_evidence_identity["artifact_manifest_sha256"],
@@ -234,8 +237,34 @@ def calculate_run_metrics(
         derived=derived,
         git_result=git_result,
         termination=termination,
+        completion_integrity=completion_integrity,
         validation_status=("valid_with_diagnostics" if diagnostics else "valid"),
         diagnostics=tuple(sorted(set(diagnostics))),
+    )
+
+
+def _calculate_completion_integrity(
+    events: tuple[NormalizedEvent, ...], raw_events: tuple[RawEvent, ...],
+):
+    """Persist phrase-level provenance without reclassifying termination."""
+    from agent_bench.metric_models import CompletionIntegrityMetrics, SelfReportedIncompleteEvidence
+
+    matches = detect_model_self_reports(events, raw_events)
+    counts = {name: 0 for name in ("time_limit", "token_limit", "context_limit", "step_or_turn_limit", "general_incomplete")}
+    for match in matches:
+        counts[match.category] += 1
+    return CompletionIntegrityMetrics(
+        self_reported_incomplete=bool(matches),
+        self_reported_limit=any(match.category != "general_incomplete" for match in matches),
+        total_count=len(matches),
+        time_limit_count=counts["time_limit"], token_limit_count=counts["token_limit"],
+        context_limit_count=counts["context_limit"], step_or_turn_limit_count=counts["step_or_turn_limit"],
+        general_incomplete_count=counts["general_incomplete"],
+        evidence=tuple(SelfReportedIncompleteEvidence(
+            category=match.category, source_event_id=match.source_event_id,
+            response_index=match.response_index, rule_id=match.rule_id,
+            matched_phrase=match.matched_phrase,
+        ) for match in matches),
     )
 
 
