@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
+import subprocess
 import threading
+from copy import deepcopy
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
-from agent_bench.executor import ExperimentState, RunProgress
+import yaml
+
+from agent_bench.config import load_experiment
+from agent_bench.executor import ExperimentState, RunProgress, create_state
+from agent_bench.matrix import expand_experiment
 from agent_bench.preservation import preserve_isolated_operation
 from agent_bench.report_server import ReportServer, ReportServerError
 from agent_bench.reporting import _seal_report
-from conftest import GitRepositoryFixture
+from conftest import ExperimentFixture, GitRepositoryFixture
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _request(url: str, payload: dict[str, object] | None = None) -> tuple[int, dict[str, object] | str, str]:
@@ -68,18 +78,100 @@ def _fixture_root(tmp_path: Path, repository: GitRepositoryFixture, *, run_ids: 
     report = tmp_path / "report"
     report.mkdir()
     (report / "report.html").write_text("<h1>sealed report</h1>", encoding="utf-8")
+    (report / "presentation.json").write_text("{}", encoding="utf-8")
     _seal_report(report, state, {"runs": [{"run_id": item.run_id, "evidence_status": "verified"} for item in state.runs]}, [])
     return report, output
 
 
-def _server(report: Path, output: Path) -> tuple[ReportServer, threading.Thread, str]:
+def _server(
+    report: Path,
+    output: Path,
+    definitions: tuple[Path, ...] = (),
+) -> tuple[ReportServer, threading.Thread, str]:
     try:
-        server = ReportServer(("127.0.0.1", 0), report, output)
+        server = ReportServer(("127.0.0.1", 0), report, output, experiment_definitions=definitions)
     except PermissionError:
         pytest.skip("the restricted test sandbox forbids loopback sockets; host CI exercises this test")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def _frozen_baseline_fixture(
+    tmp_path: Path,
+    repository: GitRepositoryFixture,
+    experiment_fixture: ExperimentFixture,
+    *,
+    result_has_index: bool = True,
+    baseline_has_index: bool = True,
+) -> tuple[Path, Path, Path, str]:
+    """Build a temporary portable subject and one sealed run using it."""
+    subject_root = tmp_path / "subjects" / "baseline-subject"
+    source = subject_root / "baseline-repo"
+    shutil.copytree(repository.path, source)
+    if baseline_has_index:
+        (source / "index.html").write_text("<h1>exact frozen baseline</h1><script src='app.js'></script>", encoding="utf-8")
+    (source / "app.js").write_text("window.frozenBaseline = true;", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run([
+        "git", "-C", str(source), "-c", "user.name=Fixture", "-c", "user.email=fixture@invalid",
+        "commit", "-m", "static baseline",
+    ], check=True)
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    tree = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD^{tree}"], text=True).strip()
+    bundle = subject_root / "baseline.bundle"
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(source), "bundle", "create", str(bundle), "HEAD"], check=True)
+    identity = {
+        "subject_id": "baseline-subject-v1",
+        "subject_version": "1.0.0",
+        "baseline_commit": commit,
+        "baseline_tree": tree,
+        "baseline_bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+    }
+    (subject_root / "subject.yaml").write_text(yaml.safe_dump({
+        "schema_version": "1.0.0", **identity,
+        "baseline_repository": "baseline-repo", "baseline_bundle": "baseline.bundle",
+    }, sort_keys=False), encoding="utf-8")
+    data = deepcopy(experiment_fixture.data)
+    data.update({
+        "identity_version": "2.0.0",
+        "experiment_id": "baseline-launch-fixture",
+        "baseline_repository": str(source),
+        "baseline_revision": commit,
+        "portable_baseline": identity,
+    })
+    definition_path = tmp_path / "baseline-launch-fixture.yaml"
+    definition_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    definition = load_experiment(definition_path)
+    run = expand_experiment(definition)[0]
+
+    def preserve_operation(root: Path) -> None:
+        if not result_has_index:
+            (root / "index.html").unlink()
+        _operation(root, index=result_has_index)
+
+    preserved = preserve_isolated_operation(
+        repository=source,
+        baseline_ref=commit,
+        run_id=run.run_id,
+        experiment_id=definition.experiment_id,
+        artifacts_root=tmp_path / "source-artifacts",
+        worktrees_root=tmp_path / "worktrees",
+        operation=preserve_operation,
+    )
+    output = tmp_path / "experiment-output"
+    shutil.copytree(preserved.artifact_path, output / "artifacts" / run.run_id)
+    state = create_state(definition)
+    state.runs[0] = state.runs[0].model_copy(update={"state": "completed"})
+    output.mkdir(exist_ok=True)
+    (output / "experiment-state.json").write_text(state.model_dump_json(), encoding="utf-8")
+    report = tmp_path / "report"
+    report.mkdir()
+    (report / "report.html").write_text("<h1>sealed report</h1>", encoding="utf-8")
+    (report / "presentation.json").write_text("{}", encoding="utf-8")
+    _seal_report(report, state, {"runs": [{"run_id": run.run_id, "evidence_status": "verified"}]}, [])
+    return report, output, definition_path, run.run_id
 
 
 def test_report_server_is_loopback_verified_and_launches_fresh_exact_static_results(tmp_path: Path, git_repository: GitRepositoryFixture) -> None:
@@ -145,3 +237,120 @@ def test_report_server_verifies_the_sealed_report_before_binding(tmp_path: Path,
 
     with pytest.raises(ReportServerError, match="cannot serve report"):
         ReportServer(("127.0.0.1", 0), report, output)
+
+
+def test_report_server_launches_exact_fresh_portable_baselines(
+    tmp_path: Path,
+    git_repository: GitRepositoryFixture,
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    report, output, definition, run_id = _frozen_baseline_fixture(
+        tmp_path, git_repository, experiment_fixture,
+    )
+    server, thread, base = _server(report, output, (definition,))
+    try:
+        # A mutable subject checkout is not the launch source: the verified
+        # portable bundle is, so this dirty change must be absent in the app.
+        subject_source = tmp_path / "subjects" / "baseline-subject" / "baseline-repo"
+        (subject_source / "index.html").write_text("<h1>mutable checkout</h1>", encoding="utf-8")
+        status, before, _ = _request(base + "/api/launch-baseline", {"run_id": run_id})
+        assert status == 200 and isinstance(before, dict)
+        assert before["kind"] == "baseline" and before["fresh"] is True
+        status, second_before, _ = _request(base + "/api/launch-baseline", {"run_id": run_id})
+        assert status == 200 and isinstance(second_before, dict)
+        status, after, _ = _request(base + "/api/launch-result", {"run_id": run_id})
+        assert status == 200 and isinstance(after, dict) and after["kind"] == "result"
+        assert before["url"] != second_before["url"] != after["url"]
+        app_status, baseline_html, _ = _request(str(before["url"]))
+        assert app_status == 200
+        assert "exact frozen baseline" in str(baseline_html)
+        assert "mutable checkout" not in str(baseline_html)
+        copies = [destination for _child, _thread, destination in server._children]
+        baseline_copies = [copy for copy in copies if copy.name.startswith("baseline-")]
+        assert len(baseline_copies) == 2
+        assert all(not (copy / ".git").exists() for copy in baseline_copies)
+    finally:
+        server.shutdown()
+        server.close()
+        thread.join(timeout=2)
+
+
+def test_report_server_reports_independent_baseline_unavailability(
+    tmp_path: Path,
+    git_repository: GitRepositoryFixture,
+) -> None:
+    report, output = _fixture_root(tmp_path, git_repository, run_ids=("pass-run",))
+    server, thread, base = _server(report, output)
+    try:
+        status, baseline, _ = _request(base + "/api/launch-baseline", {"run_id": "pass-run"})
+        assert status == 422 and isinstance(baseline, dict)
+        assert "exact immutable experiment definition is unavailable" in str(baseline["error"])
+        status, result, _ = _request(base + "/api/launch-result", {"run_id": "pass-run"})
+        assert status == 200 and isinstance(result, dict)
+    finally:
+        server.shutdown()
+        server.close()
+        thread.join(timeout=2)
+
+
+def test_report_server_keeps_a_valid_baseline_available_when_result_is_not_static(
+    tmp_path: Path,
+    git_repository: GitRepositoryFixture,
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    report, output, definition, run_id = _frozen_baseline_fixture(
+        tmp_path, git_repository, experiment_fixture, result_has_index=False,
+    )
+    server, thread, base = _server(report, output, (definition,))
+    try:
+        status, result, _ = _request(base + "/api/launch-result", {"run_id": run_id})
+        assert status == 422 and isinstance(result, dict)
+        status, baseline, _ = _request(base + "/api/launch-baseline", {"run_id": run_id})
+        assert status == 200 and isinstance(baseline, dict)
+        assert "exact frozen baseline" in str(_request(str(baseline["url"]))[1])
+    finally:
+        server.shutdown()
+        server.close()
+        thread.join(timeout=2)
+
+
+def test_report_server_reports_an_unsupported_baseline_independently(
+    tmp_path: Path,
+    git_repository: GitRepositoryFixture,
+    experiment_fixture: ExperimentFixture,
+) -> None:
+    report, output, definition, run_id = _frozen_baseline_fixture(
+        tmp_path, git_repository, experiment_fixture, baseline_has_index=False,
+    )
+    server, thread, base = _server(report, output, (definition,))
+    try:
+        status, baseline, _ = _request(base + "/api/launch-baseline", {"run_id": run_id})
+        assert status == 422 and isinstance(baseline, dict)
+        assert baseline["error"] == "Baseline unavailable: no supported static web entry point"
+        assert _request(base + "/api/launch-result", {"run_id": run_id})[0] == 200
+    finally:
+        server.shutdown()
+        server.close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("definition_name", "subject_id"),
+    [
+        ("taskboard-functional-easy-v1.yaml", "taskboard-v1"),
+        ("taskboard-functional-medium-v1.yaml", "taskboard-priority-v1"),
+        ("taskboard-functional-complex-v1.yaml", "taskboard-filtering-v1"),
+        ("pocket-ledger-v1.yaml", "pocket-ledger-v1"),
+    ],
+)
+def test_builtin_experiments_resolve_their_own_portable_baselines(
+    definition_name: str,
+    subject_id: str,
+) -> None:
+    definition = load_experiment(ROOT / "experiments" / definition_name)
+    run = expand_experiment(definition)[0]
+    subject = ReportServer._verified_subject(
+        definition, run, definition.portable_baseline.baseline_commit,
+    )
+    assert subject.identity.subject_id == subject_id
+    assert subject.identity.baseline_commit == definition.portable_baseline.baseline_commit

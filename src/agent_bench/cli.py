@@ -659,13 +659,17 @@ def report_verify(report_root: Path) -> None:
 @report_app.command("serve")
 def report_serve(
     report_root: Path = typer.Argument(..., help="Existing sealed report directory."),
-    experiment_output: Path = typer.Option(..., "--experiment-output", help="Experiment output whose sealed artifacts the report references."),
+    experiment_output: list[Path] = typer.Option(..., "--experiment-output", help="Experiment output whose sealed artifacts the report references; repeat for a unified report."),
+    experiment_definition: list[Path] | None = typer.Option(None, "--experiment-definition", help="Exact immutable experiment definition; repeat once per experiment output when needed."),
     port: Annotated[int, typer.Option("--port", min=0, max=65535, help="Loopback port; 0 selects an ephemeral port.")] = 0,
     open_browser: Annotated[bool, typer.Option("--open/--no-open", help="Open the report URL in the default browser.")] = True,
 ) -> None:
-    """Serve a verified report plus fresh, static-only preserved result copies."""
+    """Serve a verified report plus fresh static baseline and result copies."""
     try:
-        server = ReportServer(("127.0.0.1", port), report_root, experiment_output)
+        server = ReportServer(
+            ("127.0.0.1", port), report_root, experiment_output,
+            experiment_definitions=experiment_definition,
+        )
     except (ReportServerError, OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

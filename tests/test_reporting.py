@@ -506,8 +506,11 @@ def test_static_dashboard_offers_runnable_results_without_requiring_a_server() -
         "details": {run["run_id"]: {"identity": run}},
     }
     output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
-    assert "Open runnable result" in output
-    assert "Runnable results require the local Agent Bench report server." in output
+    assert "Open baseline (before)" in output
+    assert "Open runnable result (after)" in output
+    assert "Open application" in output
+    assert "Opening applications requires the local Agent Bench report server." in output
+    assert "data-baseline-result" in output
     assert "data-runnable-result" in output
 
 
