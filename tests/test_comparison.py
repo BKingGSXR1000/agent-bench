@@ -6,7 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_bench.comparison import ComparisonError, _compatibility, _pairs, _summaries, build_comparison
+from agent_bench.comparison import (
+    METRICS,
+    ComparisonError,
+    _compatibility,
+    _metric_values,
+    _pairs,
+    _summaries,
+    build_comparison,
+)
 from agent_bench.reasoning_template import verify_reasoning_template
 
 
@@ -33,6 +41,98 @@ def _row(profile: str, *, prompt: str = "a" * 64, seed: int = 1001, value: int |
             "behavior.output_tokens_before_first_model_edit_call.value": value,
         },
     }
+
+
+def _metric_dump(value: int | float | None) -> dict[str, object]:
+    """Minimal metric-value projection used by read-only compatibility tests."""
+    result: dict[str, object] = {}
+    for path in METRICS:
+        current = result
+        for part in path.split(".")[:-1]:
+            current = current.setdefault(part, {})  # type: ignore[assignment]
+        current[path.rsplit(".", 1)[-1]] = value
+    return result
+
+
+def test_historical_reasoning_metrics_are_reconstructed_read_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """An old metrics-v1 shape gains only an in-memory comparison projection."""
+    from agent_bench import comparison
+
+    historical = _metric_dump(5)
+    historical.pop("reasoning")
+    historical["derived"]["reasoning_to_output_ratio"]["value"] = None  # type: ignore[index]
+    before = json.dumps(historical, sort_keys=True)
+    artifact = tmp_path / "sealed-artifact"
+    artifact.mkdir()
+    marker = artifact / "immutable-evidence"
+    marker.write_text("unchanged", encoding="utf-8")
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        comparison,
+        "calculate_run_metrics",
+        lambda path: calls.append(path) or SimpleNamespace(model_dump=lambda **_kwargs: _metric_dump(17)),
+    )
+
+    values, provenance = _metric_values(SimpleNamespace(model_dump=lambda **_kwargs: historical), artifact)
+
+    assert calls == [artifact]
+    assert values["reasoning.reasoning_tokens_total.value"] == 17
+    assert values["reasoning.reasoning_time_total_seconds.value"] == 17
+    assert values["derived.reasoning_to_output_ratio.value"] == 17
+    assert provenance["reasoning.reasoning_tokens_total.value"] == "recalculated_from_raw_evidence"
+    assert provenance["derived.reasoning_to_output_ratio.value"] == "recalculated_from_raw_evidence"
+    assert json.dumps(historical, sort_keys=True) == before
+    assert marker.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_stored_reasoning_values_remain_authoritative(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from agent_bench import comparison
+
+    stored = _metric_dump(41)
+    monkeypatch.setattr(
+        comparison, "calculate_run_metrics",
+        lambda _artifact: pytest.fail("complete stored reasoning metrics must not be recalculated"),
+    )
+
+    values, provenance = _metric_values(SimpleNamespace(model_dump=lambda **_kwargs: stored), tmp_path)
+
+    assert values["reasoning.reasoning_tokens_total.value"] == 41
+    assert values["derived.reasoning_to_output_ratio.value"] == 41
+    assert provenance["reasoning.reasoning_tokens_total.value"] == "stored_historic_metrics"
+    assert provenance["derived.reasoning_to_output_ratio.value"] == "stored_historic_metrics"
+
+
+def test_unavailable_historical_reasoning_evidence_is_not_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from agent_bench import comparison
+
+    historical = _metric_dump(5)
+    historical.pop("reasoning")
+    historical["derived"]["reasoning_to_output_ratio"]["value"] = None  # type: ignore[index]
+    recalculated = _metric_dump(5)
+    recalculated["reasoning"] = {
+        path.split(".")[1]: {"value": None}
+        for path in METRICS if path.startswith("reasoning.")
+    }
+    recalculated["derived"]["reasoning_to_output_ratio"]["value"] = None  # type: ignore[index]
+    monkeypatch.setattr(
+        comparison,
+        "calculate_run_metrics",
+        lambda _artifact: SimpleNamespace(model_dump=lambda **_kwargs: recalculated),
+    )
+
+    values, provenance = _metric_values(SimpleNamespace(model_dump=lambda **_kwargs: historical), tmp_path)
+
+    assert values["reasoning.reasoning_tokens_before_first_tool.value"] is None
+    assert values["reasoning.reasoning_time_total_seconds.value"] is None
+    assert values["derived.reasoning_to_output_ratio.value"] is None
+    assert provenance["reasoning.reasoning_tokens_before_first_tool.value"] == "unavailable"
+    assert provenance["derived.reasoning_to_output_ratio.value"] == "unavailable"
 
 
 def test_reference_pairs_have_explicit_candidate_minus_reference_signs_and_na() -> None:
@@ -63,6 +163,39 @@ def test_reference_pairs_have_explicit_candidate_minus_reference_signs_and_na() 
     assert overall["n_available"] == 1
     assert overall["not_available_count"] == 1
     assert overall["direction_counts"] == {"faster": 1, "not_available": 1}
+
+
+def test_matching_requires_exact_prompt_sha_repetition_and_seed_without_replacement() -> None:
+    reference = _row("xhigh", prompt="a" * 64, seed=1001, value=10)
+    exact = _row("low", prompt="a" * 64, seed=1001, value=8)
+    prompt_mismatch = _row("medium", prompt="b" * 64, seed=1001, value=7)
+    seed_mismatch = _row("high", prompt="a" * 64, seed=1002, value=6)
+    missing_partner = _row("minimal", prompt="a" * 64, seed=1003, value=5)
+    # Keep repetition fixed so each exclusion demonstrates its own key field.
+    for row in (reference, exact, prompt_mismatch, seed_mismatch, missing_partner):
+        row["repetition"] = 1
+
+    pairs = _pairs(
+        [reference, exact, prompt_mismatch, seed_mismatch, missing_partner],
+        reference_profile="xhigh",
+    )
+
+    assert len(pairs) == 1
+    assert pairs[0]["candidate_profile"] == "low"
+    assert pairs[0]["prompt_sha256"] == "a" * 64
+    assert pairs[0]["seed"] == 1001
+    # The cross-root controlled subject/context guard is independent of the
+    # row-level stratum and rejects unlike benchmark subjects before pairing.
+    identity = {
+        "subject_baseline": "pocket-ledger:baseline-a", "model": "model",
+        "backend": "backend", "chat_template": "template", "hardware": "hardware",
+        "context_backend_settings": "settings",
+    }
+    subject = next(item for item in _compatibility([
+        {"root": "one", "identity": identity, "rows": []},
+        {"root": "two", "identity": {**identity, "subject_baseline": "other:baseline-a"}, "rows": []},
+    ]) if item["dimension"] == "subject_baseline")
+    assert subject["status"] == "incompatible"
 
 
 def test_pair_zero_reference_and_equal_direction_are_explicit() -> None:

@@ -66,6 +66,17 @@ METRICS = (
     "functional.failed_test_count",
 )
 
+# These fields were added after some sealed metrics-v1 records had already
+# been produced.  A comparison is a derived, read-only consumer, so it can
+# calculate them from the integrity-linked artifact when they are absent.
+# ``calculate_run_metrics`` preserves the exact-tokenizer boundary: token
+# quantities which the sealed evidence cannot support remain unavailable.
+_RAW_EVIDENCE_FALLBACK_METRICS = frozenset(
+    path for path in METRICS
+    if path.startswith(("behavior.", "reasoning."))
+    or path == "derived.reasoning_to_output_ratio.value"
+)
+
 
 def build_comparison(
     roots: list[Path], *, output: Path, definitions: list[Path] | None = None,
@@ -412,7 +423,7 @@ def _metric_values(metrics: Any, artifact: Path) -> tuple[dict[str, float | int 
     provenance: dict[str, str] = {}
     for path in METRICS:
         value = _path(dumped, path)
-        if value is None and path.startswith("behavior."):
+        if value is None and path in _RAW_EVIDENCE_FALLBACK_METRICS:
             recalculated = recalculated or calculate_run_metrics(artifact).model_dump(mode="json")
             value = _path(recalculated, path)
             provenance[path] = "recalculated_from_raw_evidence" if value is not None else "unavailable"

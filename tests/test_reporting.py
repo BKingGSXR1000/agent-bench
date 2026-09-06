@@ -300,6 +300,8 @@ def test_variant_comparison_is_metric_selectable_and_uses_only_matched_determini
     assert "function variantMatchable(row)" in output
     assert "rows without task, exact prompt SHA-256, repetition, or seed provenance are explicitly excluded" in output
     assert "matched by subject, task, exact prompt SHA-256, repetition, and seed" in output
+    assert "[variantSubject(row),row.semantic_task,row.prompt_sha256,row.repetition,row.seed]" in output
+    assert "for(const variants of cases.values())" in output
     # Median/Q1/Q3 are calculated only from matched values. Missing metrics are
     # explicit, and both sort directions remain numeric with N/A last.
     assert "median:type7(observed,.5)" in output
