@@ -495,6 +495,22 @@ def test_dashboard_renders_visible_final_and_abnormal_last_model_output() -> Non
     assert "data-final-model-response${open}" in output
 
 
+def test_static_dashboard_offers_runnable_results_without_requiring_a_server() -> None:
+    run = _run(harness="pi", task="task-a", variant="normal", repetition=1, value=1.0)
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 1, "completed": 1, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}},
+        "summary_environment": {}, "runs": [run], "summaries": [], "curves": [], "markers": [], "failures": [], "data_files": [],
+        "details": {run["run_id"]: {"identity": run}},
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "Open runnable result" in output
+    assert "Runnable results require the local Agent Bench report server." in output
+    assert "data-runnable-result" in output
+
+
 def test_comparative_validity_distinguishes_complete_partial_and_infrastructure() -> None:
     def state(states: list[str]) -> ExperimentState:
         return ExperimentState(experiment_id="fixture", definition_digest="a" * 64, expansion_digest="b" * 64,

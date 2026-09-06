@@ -5,6 +5,7 @@ import shlex
 import shutil
 import signal
 import tempfile
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -108,6 +109,7 @@ from agent_bench.manual_review import (
     prepare_review_copy, review_queue, review_root, save_review, validate_review_against_protocol,
 )
 from agent_bench.review_dashboard import ReviewDashboardServer
+from agent_bench.report_server import ReportServer, ReportServerError
 
 app = typer.Typer(
     add_completion=False,
@@ -652,6 +654,31 @@ def report_verify(report_root: Path) -> None:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Verified report {manifest['report_id']!r}: {len(manifest['files'])} files")
+
+
+@report_app.command("serve")
+def report_serve(
+    report_root: Path = typer.Argument(..., help="Existing sealed report directory."),
+    experiment_output: Path = typer.Option(..., "--experiment-output", help="Experiment output whose sealed artifacts the report references."),
+    port: Annotated[int, typer.Option("--port", min=0, max=65535, help="Loopback port; 0 selects an ephemeral port.")] = 0,
+    open_browser: Annotated[bool, typer.Option("--open/--no-open", help="Open the report URL in the default browser.")] = True,
+) -> None:
+    """Serve a verified report plus fresh, static-only preserved result copies."""
+    try:
+        server = ReportServer(("127.0.0.1", port), report_root, experiment_output)
+    except (ReportServerError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    typer.echo(f"report_url={url}")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("Stopping report server…", err=True)
+    finally:
+        server.close()
 
 
 @report_app.command("export-public")
