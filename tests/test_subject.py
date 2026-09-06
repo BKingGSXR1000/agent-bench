@@ -12,6 +12,7 @@ ROOT = Path(__file__).parents[1]
 SUBJECT = ROOT / "subjects" / "pocket-ledger-v1"
 TASKBOARD_SUBJECT = ROOT / "subjects" / "taskboard-v1"
 TASKBOARD_PRIORITY_SUBJECT = ROOT / "subjects" / "taskboard-priority-v1"
+TASKBOARD_FILTERING_SUBJECT = ROOT / "subjects" / "taskboard-filtering-v1"
 
 
 def test_subject_identity_baseline_and_commands_are_frozen() -> None:
@@ -77,3 +78,21 @@ def test_taskboard_priority_derived_baseline_is_frozen_and_independent() -> None
         assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=clone, text=True).strip() == definition["baseline_commit"]
         subprocess.run(["node", "tests/test_baseline.mjs"], cwd=clone, check=True)
     assert not (TASKBOARD_PRIORITY_SUBJECT / "baseline-repo" / "functional").exists()
+
+
+def test_taskboard_filtering_derived_baseline_is_frozen_and_has_prompt_variants() -> None:
+    definition = yaml.safe_load((TASKBOARD_FILTERING_SUBJECT / "subject.yaml").read_text())
+    bundle = TASKBOARD_FILTERING_SUBJECT / definition["baseline_bundle"]
+    assert definition["derived_from"]["medium_scenario_id"] == "combined-filtering-v1"
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == definition["baseline_bundle_sha256"]
+    with tempfile.TemporaryDirectory() as temporary:
+        clone = Path(temporary) / "baseline"
+        subprocess.run(["git", "clone", "--quiet", str(bundle), str(clone)], check=True)
+        assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=clone, text=True).strip() == definition["baseline_commit"]
+        subprocess.run(["node", "tests/test_baseline.mjs"], cwd=clone, check=True)
+    prompts = TASKBOARD_FILTERING_SUBJECT / "prompts"
+    manifest = yaml.safe_load((prompts / "manifest.yaml").read_text())
+    for variant, item in manifest["prompts"].items():
+        content = (prompts / item["path"]).read_bytes()
+        assert content
+        assert hashlib.sha256(content).hexdigest() == item["sha256"]

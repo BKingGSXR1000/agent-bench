@@ -25,6 +25,13 @@ is consequently a regression contract in Medium; search, three persisted
 filters, AND semantics, active-filter edits/deletes, clear-all, and recoverable
 zero results are the requested work.
 
+`multi-project-migration-v1` is the Complex scenario. It uses the third frozen
+derived lineage, `taskboard-filtering-v1`, so project membership, archived
+project retention, v1-to-v2 persistence migration, and atomic import/export
+are measured without reimplementing priority or filters. Its reference spans
+project-state, migration, project-scope, import/export, filtering, and board
+state modules; solutions remain free to choose another architecture.
+
 ## Lifecycle
 
 Before benchmark execution, run:
@@ -99,6 +106,11 @@ regression mutation. Its hard gates independently cover baseline regressions,
 combined-filter AND semantics, filter persistence, and active-filter
 interactions.
 
+The Complex self-check adds targeted project-isolation leakage, migration ID
+loss, import-atomicity corruption, and combined-filter regression fixtures.
+Its hard gates cover baseline behavior, project isolation, migration integrity,
+failed-import atomicity, and project/task round-trip relationships.
+
 ## Scenario coverage
 
 The initial easy scenario checks Taskboard's existing initialization, CRUD,
@@ -106,4 +118,6 @@ status handling, persistence, and filtering; then Low/Medium/High creation,
 display contract, persistence, editing, legacy records without priority, and
 invalid stored priority. The implemented Medium scenario is specified in
 `functional/scenarios/combined-filtering-v1.md`. The complex project/migration
-design remains future work in `functional/scenarios/taskboard-v1-future-scenarios.md`.
+scenario is implemented and documented in
+`functional/scenarios/multi-project-migration-v1.md` with vague, normal, and
+precise prompt variants under `subjects/taskboard-filtering-v1/prompts/`.

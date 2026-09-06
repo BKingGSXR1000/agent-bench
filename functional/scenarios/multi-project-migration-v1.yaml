@@ -1,0 +1,130 @@
+schema_version: 1.0.0
+scenario_id: multi-project-migration-v1
+subject_root: ../../subjects/taskboard-filtering-v1
+validator: ../validators/multi-project-migration-v1.mjs
+validator_version: 1.0.0
+baseline_strategy: derived-filtering-baseline
+baseline_strategy_rationale: Priority and combined filtering are frozen validated behavior in taskboard-filtering-v1, so this Complex scenario measures project state, migration, and import/export architecture.
+expected_baseline_outcomes: &baseline
+  baseline-initializes: passed
+  baseline-create: passed
+  baseline-edit: passed
+  baseline-delete: passed
+  baseline-status: passed
+  baseline-priority: passed
+  baseline-combined-filtering: passed
+  baseline-filter-persistence: passed
+  baseline-reload: passed
+  project-create: failed
+  project-rename: failed
+  project-switch-persist: failed
+  project-task-belongs-stable-id: failed
+  project-isolation: failed
+  project-cross-mutation: failed
+  archive-project-preserves-data: failed
+  archive-selection: failed
+  migration-empty: failed
+  migration-populated-preserves: failed
+  migration-reload-no-duplicate: failed
+  migration-already-new: failed
+  export-includes-state: failed
+  import-roundtrip: failed
+  import-malformed-rejected: failed
+  import-invalid-structure: failed
+  import-invalid-reference: failed
+  import-failed-atomic: failed
+  export-archived-survives: failed
+  interaction-filter-project-isolation: failed
+  interaction-switch-with-filters: failed
+  interaction-edit-visibility: passed
+  interaction-delete-filtered: passed
+  interaction-migration-create-project: failed
+hard_gates:
+  baseline_regressions: [baseline-initializes, baseline-create, baseline-edit, baseline-delete, baseline-status, baseline-priority, baseline-combined-filtering, baseline-filter-persistence, baseline-reload]
+  project_isolation: [project-isolation, project-cross-mutation, interaction-filter-project-isolation]
+  migration_integrity: [migration-populated-preserves, migration-reload-no-duplicate]
+  import_atomicity: [import-failed-atomic, import-invalid-reference]
+  round_trip_relationships: [import-roundtrip, export-archived-survives]
+self_validation:
+  known-good:
+    overlays: [../references/multi-project-migration-v1/known-good]
+    expected:
+      outcomes: &all_pass
+        baseline-initializes: passed
+        baseline-create: passed
+        baseline-edit: passed
+        baseline-delete: passed
+        baseline-status: passed
+        baseline-priority: passed
+        baseline-combined-filtering: passed
+        baseline-filter-persistence: passed
+        baseline-reload: passed
+        project-create: passed
+        project-rename: passed
+        project-switch-persist: passed
+        project-task-belongs-stable-id: passed
+        project-isolation: passed
+        project-cross-mutation: passed
+        archive-project-preserves-data: passed
+        archive-selection: passed
+        migration-empty: passed
+        migration-populated-preserves: passed
+        migration-reload-no-duplicate: passed
+        migration-already-new: passed
+        export-includes-state: passed
+        import-roundtrip: passed
+        import-malformed-rejected: passed
+        import-invalid-structure: passed
+        import-invalid-reference: passed
+        import-failed-atomic: passed
+        export-archived-survives: passed
+        interaction-filter-project-isolation: passed
+        interaction-switch-with-filters: passed
+        interaction-edit-visibility: passed
+        interaction-delete-filtered: passed
+        interaction-migration-create-project: passed
+      hard_gate_pass: true
+      score_numerator: 33
+      score_denominator: 33
+  untouched-baseline:
+    overlays: []
+    expected: {outcomes: *baseline, hard_gate_pass: false, score_numerator: 11, score_denominator: 33}
+  known-bad-isolation:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-isolation]
+    expected:
+      outcomes:
+        <<: *all_pass
+        project-isolation: failed
+        project-cross-mutation: failed
+        interaction-filter-project-isolation: failed
+        interaction-switch-with-filters: failed
+      hard_gate_pass: false
+      score_numerator: 29
+      score_denominator: 33
+  known-bad-migration:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-migration]
+    expected:
+      outcomes:
+        <<: *all_pass
+        migration-populated-preserves: failed
+      hard_gate_pass: false
+      score_numerator: 32
+      score_denominator: 33
+  known-bad-import-atomicity:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-import-atomicity]
+    expected:
+      outcomes:
+        <<: *all_pass
+        import-failed-atomic: failed
+      hard_gate_pass: false
+      score_numerator: 32
+      score_denominator: 33
+  known-bad-filter-regression:
+    overlays: [../references/multi-project-migration-v1/known-good, ../references/multi-project-migration-v1/known-bad-filter-regression]
+    expected:
+      outcomes:
+        <<: *all_pass
+        baseline-combined-filtering: failed
+      hard_gate_pass: false
+      score_numerator: 32
+      score_denominator: 33

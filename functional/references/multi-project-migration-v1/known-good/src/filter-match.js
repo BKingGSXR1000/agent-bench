@@ -1,0 +1,1 @@
+export const matches=(task,filters)=>{const query=filters.query.toLowerCase(),text=`${task.title} ${task.description}`.toLowerCase();return(!query||text.includes(query))&&(filters.status==="all"||task.status===filters.status)&&(filters.priority==="all"||task.priority===filters.priority);};

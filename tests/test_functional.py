@@ -13,6 +13,7 @@ from agent_bench.functional import baseline_check, load_functional_scenario, sel
 ROOT = Path(__file__).parents[1]
 SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v1.yaml"
 MEDIUM_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "combined-filtering-v1.yaml"
+COMPLEX_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "multi-project-migration-v1.yaml"
 
 
 def _source_fingerprint(root: Path) -> dict[str, str]:
@@ -96,3 +97,22 @@ def test_combined_filtering_self_check_proves_derived_baseline_and_targeted_reje
         "filter-state-search-persists", "filter-state-status-persists", "filter-state-priority-persists", "filter-state-reload-visible",
     }
     assert results["known-bad-delete-regression"].hard_gates["baseline_regressions"] is False
+
+
+def test_multi_project_self_check_proves_complex_targeted_rejections(tmp_path: Path) -> None:
+    scenario = load_functional_scenario(COMPLEX_SCENARIO_PATH)
+    source = ROOT / "subjects/taskboard-filtering-v1/baseline-repo"
+    before = _source_fingerprint(source)
+    results = {result.run_id.removeprefix("self-"): result for result in self_validate(scenario, tmp_path / "complex-self-check")}
+
+    assert scenario.baseline_strategy == "derived-filtering-baseline"
+    assert _source_fingerprint(source) == before
+    assert results["untouched-baseline"].score_numerator == 11
+    assert results["known-good"].score_numerator == results["known-good"].score_denominator == 33
+    assert results["known-good"].hard_gate_pass is True
+    assert {item.test_id for item in results["known-bad-isolation"].tests if item.outcome == "failed"} == {
+        "project-isolation", "project-cross-mutation", "interaction-filter-project-isolation", "interaction-switch-with-filters",
+    }
+    assert results["known-bad-migration"].hard_gates["migration_integrity"] is False
+    assert results["known-bad-import-atomicity"].hard_gates["import_atomicity"] is False
+    assert results["known-bad-filter-regression"].hard_gates["baseline_regressions"] is False

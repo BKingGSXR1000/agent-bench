@@ -1,0 +1,6 @@
+schema_version: 1.0.0
+scenario_id: multi-project-migration-v1
+prompts:
+  vague: {path: multi-project-migration-v1-vague.txt, sha256: d55aee91f6aafdd91849ed5991adbbff97c4e4f48d2462c05d456c7c7f6f28eb}
+  normal: {path: multi-project-migration-v1-normal.txt, sha256: fecf4916dba178edc126dcf7b11a9a6ef75a323543b9f742ad1d49de2fddc7cf}
+  precise: {path: multi-project-migration-v1-precise.txt, sha256: 2f377dd6400090a403a96f8d682cae335d5d2a807783b532c473390e383142ad}
