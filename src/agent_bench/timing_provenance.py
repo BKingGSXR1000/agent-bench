@@ -156,10 +156,11 @@ def derive_hermes_timing_provenance(artifact_path: Path) -> TimingProvenanceAnal
     if manifest.harness_id != "hermes" or artifact.run_id != manifest.run_id:
         raise TimingProvenanceError("source artifact is not a consistent Hermes run")
 
-    normalized_by_raw = {
-        item.raw_event_refs[0].raw_event_id: item
+    normalized_by_call = {
+        str(item.payload["tool_call_id"]): item
         for item in normalized
-        if item.raw_event_refs and item.event_kind == "tool_call_start"
+        if item.event_kind == "tool_call_start"
+        and isinstance(item.payload.get("tool_call_id"), str)
     }
     response_by_call: dict[str, object] = {}
     for event in normalized:
@@ -192,9 +193,10 @@ def derive_hermes_timing_provenance(artifact_path: Path) -> TimingProvenanceAnal
     for ordinal, (raw_start, native_start, call) in enumerate(calls, start=1):
         call_id, name = _call_identity(call)
         assert call_id is not None and name is not None
-        normalized_start = normalized_by_raw.get(raw_start.raw_event_id)
+        normalized_start = normalized_by_call.get(call_id)
         if normalized_start is None or normalized_start.elapsed_seconds is None:
-            raise TimingProvenanceError(f"missing normalized tool-start evidence for {call_id}")
+            # A proposed but unexecuted final tool is intentionally absent.
+            continue
         result = results.get(call_id)
         response = response_by_call.get(call_id)
         points.append(HermesToolTiming(
@@ -206,8 +208,8 @@ def derive_hermes_timing_provenance(artifact_path: Path) -> TimingProvenanceAnal
             native_call_recorded_timestamp_utc=_native_timestamp(native_start.get("timestamp")),
             native_result_message_id=_string(result[1].get("id")) if result else None,
             native_result_recorded_timestamp_utc=_native_timestamp(result[1].get("timestamp")) if result else None,
-            capture_timestamp_utc=raw_start.timestamp_utc,
-            capture_elapsed_seconds=raw_start.elapsed_ns / 1_000_000_000,
+            capture_timestamp_utc=normalized_start.timestamp_utc,
+            capture_elapsed_seconds=normalized_start.elapsed_ns / 1_000_000_000,
             normalized_event_id=normalized_start.event_id,
             normalized_timestamp_utc=normalized_start.timestamp_utc,
             normalized_elapsed_seconds=normalized_start.elapsed_seconds,

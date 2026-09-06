@@ -111,7 +111,10 @@ def extract_reasoning_blocks(
 
     result: list[ReasoningBlock] = []
     for block in drafts:
-        following = next((event for event in ordered if event.sequence > block.sequence and event.event_kind == "tool_call_start"), None)
+        # The model's tool-call intent is a reasoning boundary even when a
+        # timeout prevents the harness from executing that proposal.  Actual
+        # executions remain separately represented by tool_call_start.
+        following = next((event for event in ordered if event.sequence > block.sequence and event.event_kind in {"tool_call_start", "model_tool_call_observed"}), None)
         category = following.payload.get("category") if following is not None else None
         action = str(category) if isinstance(category, str) else None
         result.append(
