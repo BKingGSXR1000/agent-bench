@@ -472,6 +472,29 @@ def test_failed_run_evidence_is_reported_as_verified_infrastructure_record(tmp_p
     assert rows["failures"][0]["harness_execution_started"] is False
 
 
+def test_dashboard_renders_visible_final_and_abnormal_last_model_output() -> None:
+    run = _run(harness="hermes", task="task-a", variant="normal", repetition=1, value=1.0)
+    run.update({"run_id": "visible-response-run", "primary_performance_eligible": False})
+    presentation = {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 1, "completed": 1, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}, "portable_baseline": {}},
+        "summary_environment": {}, "runs": [run], "summaries": [], "curves": [], "markers": [], "failures": [], "data_files": [],
+        "details": {"visible-response-run": {"identity": run, "final_model_response": {
+            "technical_termination": "output_truncation", "final_response": None,
+            "last_captured_output": {"text": "I updated the feature and need one final check.", "response_index": 12,
+                "source_event_id": "run:raw:12", "finish_reason": "length", "capture_status": "partial",
+                "extraction_method": "proxy_response_body_visible_content_v1"},
+        }}},
+    }
+    output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
+    assert "Final model response" in output
+    assert "Last captured model output before termination" in output
+    assert "I updated the feature and need one final check." in output
+    assert "data-final-model-response${open}" in output
+
+
 def test_comparative_validity_distinguishes_complete_partial_and_infrastructure() -> None:
     def state(states: list[str]) -> ExperimentState:
         return ExperimentState(experiment_id="fixture", definition_digest="a" * 64, expansion_digest="b" * 64,

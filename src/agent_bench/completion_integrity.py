@@ -15,6 +15,19 @@ TECHNICAL_PRIMARY_TERMINATIONS = frozenset({"success", "no_changes"})
 SelfReportCategory = Literal[
     "time_limit", "token_limit", "context_limit", "step_or_turn_limit", "general_incomplete",
 ]
+VisibleResponseCaptureStatus = Literal["complete", "partial", "unknown"]
+
+
+@dataclass(frozen=True)
+class VisibleModelResponse:
+    """One sealed, user-visible assistant response and its exact provenance."""
+
+    text: str
+    source_event_id: str
+    response_index: int
+    finish_reason: str | None
+    capture_status: VisibleResponseCaptureStatus
+    extraction_method: str
 
 
 @dataclass(frozen=True)
@@ -58,49 +71,137 @@ def detect_model_self_reports(
     events: tuple[NormalizedEvent, ...], raw_events: tuple[RawEvent, ...],
 ) -> tuple[SelfReportMatch, ...]:
     """Inspect only captured model/assistant response text, never prompts or tools."""
-    responses = list(_raw_response_texts(raw_events))
-    # Some controlled/test captures expose final assistant text directly in a
-    # normalized llm response.  Do not inspect any other normalized payload.
-    responses.extend(
-        (event.event_id, text)
-        for event in events
-        if event.event_kind == "llm_response"
-        for text in (_response_text_field(event.payload),)
-        if text
-    )
+    responses = extract_visible_model_responses(events, raw_events)
     matches: list[SelfReportMatch] = []
     seen: set[tuple[str, str, str]] = set()
-    for index, (event_id, text) in enumerate(responses, start=1):
+    for response in responses:
         # Quoted/code spans are commonly copied source or documentation.  It
         # is safer to miss an ambiguous statement than classify it as a limit.
-        candidate = re.sub(r"(?:`[^`]*`|'[^']*'|\"[^\"]*\")", " ", text)
+        candidate = re.sub(r"(?:`[^`]*`|'[^']*'|\"[^\"]*\")", " ", response.text)
         candidate = " ".join(candidate.split())
         for category, rule_id, pattern in _RULES:
             found = pattern.search(candidate)
             if found is None:
                 continue
             phrase = found.group(0)
-            key = (event_id, rule_id, phrase.casefold())
+            key = (response.source_event_id, rule_id, phrase.casefold())
             if key not in seen:
                 seen.add(key)
-                matches.append(SelfReportMatch(category, event_id, index, rule_id, phrase))
+                matches.append(SelfReportMatch(
+                    category, response.source_event_id, response.response_index,
+                    rule_id, phrase,
+                ))
     return tuple(matches)
 
 
-def _raw_response_texts(raw_events: tuple[RawEvent, ...]):
+def extract_visible_model_responses(
+    events: tuple[NormalizedEvent, ...], raw_events: tuple[RawEvent, ...],
+) -> tuple[VisibleModelResponse, ...]:
+    """Extract only sealed, user-visible assistant text from supported sources.
+
+    This is deliberately the single parser for completion self-reports and
+    report presentation.  It never inspects prompts, tool data, or reasoning.
+    Normalized visible fields are a fallback for captures that expose text only
+    in the normalized representation; they are not duplicated when their raw
+    source already yielded visible text.
+    """
+    extracted: list[tuple[int, int, str, str, str | None, VisibleResponseCaptureStatus, str]] = []
     for event in raw_events:
         if event.source == "proxy" and event.event_type == "llm_response":
             text = _proxy_visible_text(event.payload)
+            finish_reason = _finish_reason(event.payload)
+            status = _capture_status(finish_reason)
+            method = "proxy_response_body_visible_content_v1"
         elif event.event_type == "hermes_session_message":
             native = event.payload.get("native_event")
             text = _assistant_content(native)
+            finish_reason = _finish_reason(native)
+            status = _capture_status(finish_reason)
+            method = "hermes_session_assistant_content_v1"
         elif event.event_type == "pi_event":
             native = event.payload.get("native_event")
             text = _pi_assistant_content(native)
+            message = native.get("message") if isinstance(native, dict) else None
+            finish_reason = _finish_reason(message)
+            status = _capture_status(finish_reason)
+            method = "pi_message_end_assistant_content_v1"
         else:
-            text = None
+            continue
         if text:
-            yield event.raw_event_id, text
+            extracted.append((
+                event.sequence, 0, event.raw_event_id, text, finish_reason, status,
+                method,
+            ))
+
+    raw_ids = {source_event_id for _position, _origin, source_event_id, *_rest in extracted}
+    for event in events:
+        if event.event_kind != "llm_response" or any(
+            reference.raw_event_id in raw_ids for reference in event.raw_event_refs
+        ):
+            continue
+        text = _response_text_field(event.payload)
+        if not text:
+            continue
+        finish_reason = _finish_reason(event.payload)
+        explicit_status = event.payload.get("capture_status") if isinstance(event.payload, dict) else None
+        status = (
+            explicit_status if explicit_status in {"complete", "partial", "unknown"}
+            else _capture_status(finish_reason)
+        )
+        raw_position = min(
+            (reference.raw_sequence for reference in event.raw_event_refs),
+            default=len(raw_events) + event.sequence,
+        )
+        extracted.append((
+            raw_position, 1, event.event_id, text, finish_reason, status,
+            "normalized_llm_response_visible_field_v1",
+        ))
+    return tuple(
+        VisibleModelResponse(
+            text=text, source_event_id=source_event_id, response_index=index,
+            finish_reason=finish_reason, capture_status=status,
+            extraction_method=method,
+        )
+        for index, (_position, _origin, source_event_id, text, finish_reason, status, method)
+        in enumerate(sorted(extracted), start=1)
+    )
+
+
+def select_final_visible_model_response(
+    events: tuple[NormalizedEvent, ...], raw_events: tuple[RawEvent, ...],
+    *, termination_class: object,
+) -> tuple[VisibleModelResponse | None, VisibleModelResponse | None]:
+    """Return (ordinary final response, last output before abnormal end)."""
+    responses = extract_visible_model_responses(events, raw_events)
+    if termination_class in TECHNICAL_PRIMARY_TERMINATIONS:
+        final = next(
+            (response for response in reversed(responses)
+             if response.capture_status == "complete"
+             and response.finish_reason != "tool_calls"),
+            None,
+        )
+        return final, None
+    return None, (responses[-1] if responses else None)
+
+
+def _finish_reason(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("finish_reason", "stopReason"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _capture_status(finish_reason: str | None) -> VisibleResponseCaptureStatus:
+    if finish_reason in {"length", "max_tokens", "max_output_tokens", "aborted", "cancelled", "error"}:
+        return "partial"
+    if finish_reason in {"stop", "tool_calls", "end_turn", "completed", "complete", "success"}:
+        return "complete"
+    # An emitted message or a completed HTTP exchange without a native finish
+    # state is useful captured text, but it does not prove ordinary completion.
+    return "unknown"
 
 
 def _response_text_field(payload: object) -> str | None:

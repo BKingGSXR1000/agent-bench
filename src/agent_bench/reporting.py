@@ -28,9 +28,12 @@ import yaml
 from agent_bench import __version__
 from agent_bench.config import ExperimentConfigError, load_experiment
 from agent_bench.context_storage import verify_context_analysis_artifact
-from agent_bench.completion_integrity import primary_eligibility
+from agent_bench.completion_integrity import (
+    primary_eligibility,
+    select_final_visible_model_response,
+)
 from agent_bench.failure import verify_failed_run
-from agent_bench.events import load_normalized_events
+from agent_bench.events import load_normalized_events, load_raw_events
 from agent_bench.executor import ExperimentState
 from agent_bench.functional_storage import verify_functional_validation_artifact
 from agent_bench.matrix import expand_experiment
@@ -1353,6 +1356,16 @@ def _presentation(
             manifest = json.loads((artifact_root / "run" / "manifest.json").read_text(encoding="utf-8"))
             detail["capture_capabilities"] = _sanitize_public(manifest.get("capture_capabilities", {}))
             detail["invocation"] = _captured_invocation(artifact_root, str(run.get("harness") or ""))
+            final, last = select_final_visible_model_response(
+                load_normalized_events(artifact_root / "normalized" / "events.jsonl"),
+                load_raw_events(artifact_root / "raw" / "events.jsonl"),
+                termination_class=run.get("termination_class"),
+            )
+            detail["final_model_response"] = {
+                "technical_termination": run.get("termination_class"),
+                "final_response": _visible_response_presentation(final),
+                "last_captured_output": _visible_response_presentation(last),
+            }
         details[run_id] = detail
     counts = _state_counts(state)
     return {
@@ -1381,6 +1394,20 @@ def _presentation(
             "parquet/timing.parquet", "parquet/artifacts.parquet", "parquet/summaries.parquet",
             "report-manifest.json", "checksums.sha256",
         ],
+    }
+
+
+def _visible_response_presentation(response: Any) -> dict[str, Any] | None:
+    """Expose only the canonical extractor's visible-text result to the UI."""
+    if response is None:
+        return None
+    return {
+        "text": response.text,
+        "response_index": response.response_index,
+        "source_event_id": response.source_event_id,
+        "finish_reason": response.finish_reason,
+        "capture_status": response.capture_status,
+        "extraction_method": response.extraction_method,
     }
 
 
@@ -1530,6 +1557,30 @@ def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
   const problems=d.failures||[];$('failure-table').innerHTML=table(problems,[['run_id','Run'],['state','State'],['failure_class','Failure class'],['failure_domain','Failure domain'],['failure_phase','Failure phase'],['detail','Detail'],['harness_execution_started','Harness began'],['llm_request_observed','LLM observed'],['preservation_completed','Evidence sealed'],['evidence_status','Evidence']]);const pending=d.runs.filter(x=>x.state==='pending');$('pending-table').innerHTML=table(pending,[['execution_index','Execution index'],['canonical_matrix_index','Matrix index'],['harness','Harness'],['harness_profile','Profile'],['semantic_task','Task'],['prompt_variant','Prompt'],['repetition','Rep'],['run_id','Run ID']]);
   $('provenance-content').innerHTML=`<p class="source">Fixed versus matrix configuration sources: ${esc(d.definition.definition_source||'unavailable')} and ${esc(d.definition.backend_configuration_source||'unavailable')}. Capture-capability and preservation rows are per-run sealed evidence.</p><details open><summary>Experiment / result provenance</summary>${kv({experiment_id:d.experiment_id,definition_digest:d.definition_digest,expansion_digest:d.expansion_digest,summary_environment:d.summary_environment,portable_baseline:d.definition.portable_baseline,profiles:(d.definition.profiles||[]).map(x=>({profile_id:x.profile_id,version:x.profile_version,upstream_defaults_source:x.upstream_defaults_source,deviations:x.deviations,source:x.source,source_sha256:x.source_sha256}))})}</details><details><summary>Harness identities</summary>${kv(d.definition.harnesses||[])}</details>`;
   $('data-files').innerHTML=d.data_files.map(f=>`<span class="pill"><a href="${esc(f)}" download>${esc(f)}</a></span>`).join(' ');setFilters();renderRuns();setVariantControls();
+})();
+</script><script>
+(() => {
+  const payload=JSON.parse(document.getElementById('agent-bench-data').textContent);
+  const root=document.getElementById('run-detail');
+  const esc=value=>String(value??'Not recorded (no sealed evidence)').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const fields=response=>`<div class="table-wrap"><table><tbody>${[['Technical completion',response.technical_termination],['Finish reason',response.finish_reason],['Capture status',response.capture_status],['Response index',response.response_index],['Source event',response.source_event_id],['Method',response.extraction_method]].map(([name,value])=>`<tr><th>${esc(name)}</th><td class="mono">${esc(value)}</td></tr>`).join('')}</tbody></table></div>`;
+  function render(){
+    const article=root.querySelector('article');
+    if(!article||article.querySelector('[data-final-model-response]'))return;
+    const runId=article.querySelector('h3')?.textContent;
+    const detail=runId&&payload.details?.[runId];
+    const response=detail?.final_model_response;
+    if(!response)return;
+    const open=detail.identity?.primary_performance_eligible===true?'':' open';
+    const final=response.final_response,last=response.last_captured_output;
+    const body=final
+      ? `${fields({...final,technical_termination:response.technical_termination})}<pre>${esc(final.text)}</pre>`
+      : `<p><strong>Final visible model response:</strong> none / not observed.</p>${last?`<h4>Last captured model output before termination</h4>${fields({...last,technical_termination:response.technical_termination})}<pre>${esc(last.text)}</pre>`:`<p><strong>Last captured model output before termination:</strong> unavailable.</p><div class="table-wrap"><table><tbody><tr><th>Technical termination</th><td class="mono">${esc(response.technical_termination)}</td></tr><tr><th>Capture status</th><td class="mono">unavailable</td></tr></tbody></table></div>`}`;
+    const section=`<details data-final-model-response${open}><summary>Final model response</summary>${body}</details>`;
+    const prompt=[...article.querySelectorAll('details')].find(item=>item.querySelector('summary')?.textContent.startsWith('Exact benchmark prompt'));
+    (prompt||article.querySelector('h3')).insertAdjacentHTML('afterend',section);
+  }
+  new MutationObserver(render).observe(root,{childList:true,subtree:true});
 })();
 </script></body></html>\n"""
     return document.replace("__TITLE__", title).replace("__DATA__", data)

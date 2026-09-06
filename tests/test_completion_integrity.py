@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_bench.completion_integrity import detect_model_self_reports, primary_eligibility
+from agent_bench.completion_integrity import (
+    detect_model_self_reports,
+    extract_visible_model_responses,
+    primary_eligibility,
+    select_final_visible_model_response,
+)
 from agent_bench.events import NormalizedEvent, RawEvent, RawEventReference
 
 
@@ -51,6 +56,53 @@ def test_detector_only_reads_response_events() -> None:
     tool = event.model_copy(update={"event_id": "tool-1", "event_kind": "shell_command",
                                     "payload": {"assistant_text": "I ran out of time"}})
     assert detect_model_self_reports((tool,), ()) == ()
+
+
+def test_visible_response_extraction_excludes_reasoning_and_selects_final_or_last_output() -> None:
+    raw = (
+        RawEvent.create(
+            raw_event_id="raw-1", run_id="run-1", sequence=1,
+            timestamp_utc=datetime.now(timezone.utc), source="harness",
+            event_type="hermes_session_message", payload={"native_event": {
+                "role": "assistant", "content": "I inspected the files.",
+                "reasoning_content": "private planning", "finish_reason": "tool_calls",
+            }},
+        ),
+        RawEvent.create(
+            raw_event_id="raw-2", run_id="run-1", sequence=2,
+            timestamp_utc=datetime.now(timezone.utc), source="harness",
+            event_type="pi_event", payload={"native_event": {
+                "type": "message_end", "message": {
+                    "role": "assistant", "content": [{"type": "text", "text": "Implemented and tested it."}],
+                    "stopReason": "stop", "thinking": "private final thought",
+                },
+            }},
+        ),
+    )
+    responses = extract_visible_model_responses((), raw)
+    assert [response.text for response in responses] == [
+        "I inspected the files.", "Implemented and tested it.",
+    ]
+    assert all("private" not in response.text for response in responses)
+    final, last = select_final_visible_model_response((), raw, termination_class="success")
+    assert final is not None and final.text == "Implemented and tested it."
+    assert last is None
+    final, last = select_final_visible_model_response((), raw, termination_class="timeout")
+    assert final is None
+    assert last is not None and last.text == "Implemented and tested it."
+
+
+def test_visible_response_extraction_marks_exact_length_finish_as_partial() -> None:
+    raw = RawEvent.create(
+        raw_event_id="raw-1", run_id="run-1", sequence=1,
+        timestamp_utc=datetime.now(timezone.utc), source="harness", event_type="pi_event",
+        payload={"native_event": {"type": "message_end", "message": {
+            "role": "assistant", "content": "I need to finish the last step", "stopReason": "length",
+        }}},
+    )
+    response = extract_visible_model_responses((), (raw,))[0]
+    assert response.capture_status == "partial"
+    assert response.finish_reason == "length"
 
 
 def test_primary_eligibility_keeps_technical_termination_separate() -> None:
