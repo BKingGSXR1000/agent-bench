@@ -11,6 +11,8 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from agent_bench.functional import load_functional_scenario
+from agent_bench.functional_suite import load_functional_suite
 from agent_bench.models import ExperimentDefinition
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -59,11 +61,13 @@ def load_experiment(path: Path) -> ExperimentDefinition:
     data["prompts"] = _load_prompts(data.get("prompts"), experiment_path.parent)
 
     try:
-        return ExperimentDefinition.model_validate(data)
+        experiment = ExperimentDefinition.model_validate(data)
     except ValidationError as exc:
         raise ExperimentConfigError(
             f"invalid experiment configuration in {experiment_path}:\n{exc}"
         ) from exc
+    _validate_functional_associations(experiment)
+    return experiment
 
 
 def _load_prompts(value: object, base_directory: Path) -> list[dict[str, Any]]:
@@ -127,5 +131,79 @@ def _load_prompts(value: object, base_directory: Path) -> list[dict[str, Any]]:
                 "sha256": calculated_sha256,
             }
         )
+        _load_functional_association(prompt, base_directory, index)
         loaded.append(prompt)
     return loaded
+
+
+def _load_functional_association(prompt: dict[str, Any], base_directory: Path, index: int) -> None:
+    """Resolve and pin one optional evaluator scenario contract."""
+    value = prompt.get("functional_scenario")
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ExperimentConfigError(f"prompt {index} functional_scenario must be a mapping")
+    raw = deepcopy(value)
+    definition = raw.get("scenario_definition")
+    if not isinstance(definition, str) or not definition:
+        raise ExperimentConfigError(f"prompt {index} functional_scenario requires scenario_definition")
+    scenario_path = (base_directory / definition).resolve() if not Path(definition).is_absolute() else Path(definition).resolve()
+    try:
+        scenario = load_functional_scenario(scenario_path)
+    except Exception as exc:
+        raise ExperimentConfigError(f"prompt {index} functional scenario is invalid: {exc}") from exc
+    if raw.get("scenario_id") != scenario.scenario_id:
+        raise ExperimentConfigError(f"prompt {index} functional scenario_id does not match scenario definition")
+    if raw.get("prompt_variant") != prompt.get("variant_label"):
+        raise ExperimentConfigError(f"prompt {index} functional prompt_variant must match variant_label")
+    raw["scenario_definition"] = scenario_path
+    observed_identity = {
+        "scenario_definition_sha256": hashlib.sha256(scenario_path.read_bytes()).hexdigest(),
+        "validator_version": scenario.validator_version,
+        "validator_sha256": hashlib.sha256(scenario.validator.read_bytes()).hexdigest(),
+    }
+    for field, observed in observed_identity.items():
+        configured = raw.get(field)
+        if configured is not None and configured != observed:
+            raise ExperimentConfigError(f"prompt {index} functional {field} does not match checked-in evaluator content")
+        raw[field] = observed
+    suite_path = raw.pop("suite_manifest", None)
+    if suite_path is None:
+        raise ExperimentConfigError(f"prompt {index} functional_scenario requires suite_manifest to bind its prompt contract")
+    if suite_path is not None:
+        if not isinstance(suite_path, str) or not suite_path:
+            raise ExperimentConfigError(f"prompt {index} suite_manifest must be a non-empty path")
+        resolved_suite = (base_directory / suite_path).resolve() if not Path(suite_path).is_absolute() else Path(suite_path).resolve()
+        try:
+            suite = load_functional_suite(resolved_suite)
+            entry = next(item for item in suite.scenarios if item.scenario_id == scenario.scenario_id)
+        except Exception as exc:
+            raise ExperimentConfigError(f"prompt {index} functional suite contract is invalid: {exc}") from exc
+        if entry.scenario_definition_sha256 != raw["scenario_definition_sha256"] or entry.validator_sha256 != raw["validator_sha256"]:
+            raise ExperimentConfigError(f"prompt {index} functional scenario does not match suite contract")
+        expected_prompt = entry.prompts[raw["prompt_variant"]]
+        if expected_prompt.sha256 != prompt["sha256"]:
+            raise ExperimentConfigError(f"prompt {index} bytes do not match the suite prompt contract")
+        raw.update({"suite_id": suite.suite_id, "suite_version": suite.suite_version, "suite_manifest_sha256": suite.manifest_sha256})
+    prompt["functional_scenario"] = raw
+
+
+def _validate_functional_associations(experiment: ExperimentDefinition) -> None:
+    """Fail closed when a configured functional task disagrees with its baseline."""
+    for prompt in experiment.prompts:
+        association = prompt.functional_scenario
+        if association is None:
+            continue
+        if prompt.semantic_task_id != association.scenario_id:
+            raise ExperimentConfigError(
+                f"prompt {prompt.prompt_id} semantic_task_id must equal functional scenario_id"
+            )
+        scenario = load_functional_scenario(association.scenario_definition)
+        if experiment.portable_baseline is None:
+            raise ExperimentConfigError("functional scenarios require identity_version 2.0.0 portable_baseline")
+        from agent_bench.subject import load_frozen_subject
+        subject = load_frozen_subject(scenario.subject_root)
+        if experiment.portable_baseline != subject.identity:
+            raise ExperimentConfigError(
+                f"functional scenario {association.scenario_id} baseline does not match experiment portable_baseline"
+            )

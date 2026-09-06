@@ -249,6 +249,18 @@ scenario construction is complete; executor integration is the next separate
 step. It deliberately does not change live executor behavior, generate a
 composite efficiency score, or run a browser/GPU/real harness.
 
+## M13 — Functional executor integration
+
+M13 integrates the completed M12 scenario contracts as an opt-in per-task
+executor analysis layer. Functional runs receive a visible pre-run
+baseline-health gate and a post-run validator that evaluates only a restored
+sealed source snapshot. `functional-validation-v1` is stored independently of
+metrics and context analysis. Functional incorrectness remains a completed run
+with a functional FAIL outcome; validator/restore/storage faults remain
+explicit analysis-infrastructure failures and preserve retryable sealed source
+evidence. Historical non-functional experiment identities and lifecycle
+requirements are unchanged. Major report/UI integration remains future work.
+
 ## M11 — Qualitative reasoning export
 
 Optional later phase.

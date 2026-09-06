@@ -115,6 +115,58 @@ documented functional-score threshold. It must never call fewer reasoning tokens
 better when the corresponding implementation is functionally worse, and no
 composite efficiency score is produced by M12.
 
+## M13 executor lifecycle
+
+Functional validation is opt-in per prompt/task through a pinned
+`functional_scenario` association. It records the scenario ID, exact scenario
+and validator SHA-256 values, prompt variant, and (when used) suite identity.
+Configuration loading verifies that the prompt bytes and variant belong to that
+scenario contract and that the frozen subject lineage matches the experiment's
+portable baseline. No scenario is inferred from a filename or prompt wording.
+
+For an associated run the executor performs, in order:
+
+```text
+verified frozen baseline → visible baseline-health gate → harness execution
+→ sealed result preservation → metrics/context analysis → restored sealed
+snapshot → hidden functional acceptance → sealed functional analysis artifact
+```
+
+Baseline health is only a pre-run visible regression check. It does not run the
+M12 missing-feature discrimination vector. A failed health gate prevents the
+harness and any LLM request, records create-only precondition evidence under
+`functional-preconditions/`, and is an infrastructure-precondition failure.
+
+Post-run validation never trusts the live worktree. It verifies the sealed
+artifact, restores `source/source.tar` into a disposable directory, validates
+that restored source, and removes the directory. The validator and references
+remain evaluator-owned throughout.
+
+The resulting immutable analysis layer is:
+
+```text
+analysis/<run-id>/functional-validation-v1/
+  functional-validation.json
+  manifest.json
+  checksums.sha256
+```
+
+The result binds the run/experiment IDs, preserved-artifact and source-snapshot
+hashes, source run-manifest hash, scenario/validator/suite/prompt identities,
+baseline lineage, complete individual outcomes and category counts, hard gates,
+and acceptance score when available. `agent-bench functional verify-result` and
+`inspect-result` operate on this sealed artifact.
+
+An acceptance `fail` (for example, a lower score or failed hard gate) is a
+valid completed benchmark run: it is never mapped to executor `failed`.
+Validator `error` or `unavailable`, restore failure, digest mismatch, and
+functional-artifact storage failure are analysis-infrastructure failures. They
+do not claim an acceptance score, leave the sealed source intact for a later
+retry, and are recorded separately under `functional-analysis-failures/` when
+the analysis cannot be sealed. Non-functional historical runs neither create
+nor require this analysis artifact; their definitions, matrix/run IDs, seeds,
+and digests remain unchanged.
+
 ## Validator self-validation invariant
 
 A functional scenario is not considered validated until all four conditions

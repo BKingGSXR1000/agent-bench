@@ -144,6 +144,8 @@ def _make_run_definition(
             mode="json", exclude={"definition_digest"}
         ),
     }
+    if prompt.functional_scenario is not None:
+        intrinsic_identity["functional_scenario"] = prompt.functional_scenario._definition_identity()
     if experiment.identity_version == "2.0.0":
         # The checkout location is intentionally operational only.  A fresh
         # clone may materialize this same bundle anywhere and retain run IDs.
@@ -161,6 +163,11 @@ def _make_run_definition(
         f"{_slug(prompt.prompt_id)}-r{repetition_index:03d}-{identity_digest[:24]}"
     )
     run_payload = dict(intrinsic_identity)
+    # The resolved scenario path is required by the executor, but never enters
+    # the portable run ID: ``intrinsic_identity`` above carries only its pinned
+    # digest/identity payload.
+    if prompt.functional_scenario is not None:
+        run_payload["functional_scenario"] = prompt.functional_scenario
     # These values are required to execute a run locally, but v2 intentionally
     # leaves them outside the intrinsic ID/digest.
     if experiment.identity_version == "2.0.0":

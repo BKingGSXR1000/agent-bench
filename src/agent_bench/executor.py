@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,6 +19,12 @@ from agent_bench.context_analysis import derive_context_analysis
 from agent_bench.context_storage import (
     store_context_analysis_artifact,
     verify_context_analysis_artifact,
+)
+from agent_bench.functional import baseline_health_check, load_functional_scenario
+from agent_bench.functional_storage import (
+    FunctionalValidationStorageError,
+    validate_and_store_functional_artifact,
+    verify_functional_validation_artifact,
 )
 from agent_bench.matrix import expand_experiment
 from agent_bench.metrics_storage import verify_metrics_artifact
@@ -58,6 +65,7 @@ class RunProgress(BaseModel):
     harness_execution_started: bool | None = None
     llm_request_observed: bool | None = None
     preservation_completed: bool | None = None
+    functional_validation_status: Literal["pass", "fail", "error", "unavailable"] | None = None
 
 
 class ExperimentState(BaseModel):
@@ -89,6 +97,7 @@ class DispatchOutcome:
     harness_execution_started: bool | None = None
     llm_request_observed: bool | None = None
     preservation_completed: bool | None = None
+    functional_validation_status: Literal["pass", "fail", "error", "unavailable"] | None = None
 
 
 Dispatch = Callable[[RunDefinition, Path], bool | DispatchOutcome]
@@ -161,13 +170,23 @@ def load_or_create(root: Path, experiment: ExperimentDefinition, resume: bool) -
     return state
 
 
-def completed_artifact(root: Path, run_id: str) -> bool:
+def completed_artifact(root: Path, run_id: str, *, functional: bool = False) -> bool:
     artifact = root / "artifacts" / run_id
     try:
         manifest = verify_artifact(artifact)
         verify_metrics_artifact(root / "analysis" / run_id / "metrics-v1")
         verify_context_analysis_artifact(root / "analysis" / run_id / "context-analysis-v2")
         verify_published_result(root, manifest)
+        if functional:
+            functional_result = verify_functional_validation_artifact(
+                root / "analysis" / run_id / "functional-validation-v1"
+            )
+            if (
+                functional_result.result.source_artifact_manifest_sha256 != _sha256_file(artifact / "manifest.json")
+                or functional_result.result.source_snapshot_sha256 != manifest.source_snapshot_sha256
+                or functional_result.result.source_run_manifest_sha256 != _sha256_file(artifact / "run/manifest.json")
+            ):
+                return False
     except Exception:
         return False
     return (artifact / "normalized/events.jsonl").is_file()
@@ -193,7 +212,7 @@ class ExperimentExecutor:
             if selected is not None and progress.run_id not in selected:
                 continue
             if progress.state == "completed":
-                if completed_artifact(self.output_root, progress.run_id):
+                if completed_artifact(self.output_root, progress.run_id, functional=planned[progress.run_id].functional_scenario is not None):
                     continue
                 progress.state, progress.detail = "invalid", "completed-run integrity verification failed"
                 write_state(self.output_root, state)
@@ -206,6 +225,7 @@ class ExperimentExecutor:
             progress.state, progress.detail = "preflight", None
             progress.failure_domain = progress.failure_class = progress.failure_phase = None
             progress.harness_execution_started = progress.llm_request_observed = progress.preservation_completed = None
+            progress.functional_validation_status = None
             write_state(self.output_root, state)
             _append_executor_event(self.output_root, progress)
 
@@ -238,6 +258,7 @@ class ExperimentExecutor:
                 progress.harness_execution_started = outcome.harness_execution_started
                 progress.llm_request_observed = outcome.llm_request_observed
                 progress.preservation_completed = outcome.preservation_completed
+                progress.functional_validation_status = outcome.functional_validation_status
             except (KeyboardInterrupt, SystemExit):
                 progress.state, progress.detail = "interrupted", "executor interrupted"
                 state.interrupted = True
@@ -288,10 +309,28 @@ class _ControlledDispatch:
 
     def __call__(self, run: RunDefinition, output_root: Path) -> DispatchOutcome:
         baseline = output_root / "runtime" / "baselines" / run.run_id
-        materialize_baseline(self.subject, baseline)
         preserved = False
         try:
+            materialize_baseline(self.subject, baseline)
             verify_materialized_baseline(baseline, self.subject.identity)
+            scenario = None
+            if run.functional_scenario is not None:
+                scenario = load_functional_scenario(run.functional_scenario.scenario_definition)
+                if scenario.scenario_id != run.functional_scenario.scenario_id:
+                    raise ExecutorError("functional scenario ID differs from run association")
+                if _sha256_file(run.functional_scenario.scenario_definition) != run.functional_scenario.scenario_definition_sha256 or _sha256_file(scenario.validator) != run.functional_scenario.validator_sha256:
+                    raise ExecutorError("functional scenario or validator digest differs from run association")
+                from agent_bench.subject import load_frozen_subject
+                if load_frozen_subject(scenario.subject_root).identity != self.subject.identity:
+                    raise ExecutorError("functional scenario baseline differs from controlled subject")
+                health = baseline_health_check(scenario, baseline)
+                _write_functional_precondition(output_root, run, health.model_dump(mode="json"))
+                if health.status != "passed":
+                    return DispatchOutcome(
+                        False, "functional baseline health did not pass",
+                        "infrastructure_precondition", "functional_baseline_health_failed", "preflight",
+                        False, False, False,
+                    )
             local_run = run.model_copy(update={"baseline_repository": baseline, "baseline_revision": self.subject.identity.baseline_commit})
             arguments = {"run_definition": local_run, "prompt_content": self.prompts[run.prompt_id], "output_root": output_root, "phase_reporter": self.phase_reporter}
             if run.harness_id == "opencode":
@@ -326,12 +365,34 @@ class _ControlledDispatch:
             publish_result_ref(output_root, baseline, result.run.artifact_manifest)
             verify_published_result(output_root, result.run.artifact_manifest)
             preserved = True
+            if scenario is not None:
+                try:
+                    stored = validate_and_store_functional_artifact(
+                        source_artifact=result.run.artifact_path, output_root=output_root / "analysis",
+                        run_id=run.run_id, experiment_id=run.experiment_id,
+                        association=run.functional_scenario,
+                    )
+                    verified = verify_functional_validation_artifact(stored.root)
+                except FunctionalValidationStorageError as exc:
+                    _write_functional_analysis_failure(output_root, run, exc)
+                    return DispatchOutcome(
+                        False, str(exc), "analysis", "functional_validation_infrastructure_error", "analyzing",
+                        True, None, True, "error",
+                    )
+                if verified.result.validation_status in {"error", "unavailable"}:
+                    return DispatchOutcome(
+                        False, "functional validator infrastructure did not produce an acceptance result",
+                        "analysis", f"functional_validator_{verified.result.validation_status}", "analyzing",
+                        True, None, True, verified.result.validation_status,
+                    )
+                # Functional incorrectness is valid completed benchmark evidence.
+                return DispatchOutcome(True, preservation_completed=True, functional_validation_status=verified.result.validation_status)
             return DispatchOutcome(True, preservation_completed=True)
         except Exception as exc:
             _preserve_result_store_failure(output_root, run.run_id, baseline, exc)
             raise
         finally:
-            if preserved and baseline.exists():
+            if (preserved or run.functional_scenario is not None) and baseline.exists():
                 shutil.rmtree(baseline)
 
 
@@ -392,6 +453,40 @@ def _preserve_result_store_failure(output_root: Path, run_id: str, baseline: Pat
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def _write_functional_precondition(output_root: Path, run: RunDefinition, evidence: dict[str, object]) -> None:
+    """Create-only baseline-health evidence; it contains no agent output."""
+    root = output_root / "functional-preconditions"
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f"{run.run_id}-baseline-health.json"
+    if target.exists():
+        raise ExecutorError(f"functional baseline-health evidence already exists: {target}")
+    payload = {
+        "schema_version": "1.0.0", "run_id": run.run_id, "experiment_id": run.experiment_id,
+        "functional_scenario": run.functional_scenario.model_dump(mode="json") if run.functional_scenario else None,
+        "baseline_health": evidence,
+    }
+    target.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
+
+
+def _write_functional_analysis_failure(output_root: Path, run: RunDefinition, error: Exception) -> None:
+    """Keep retry evidence while leaving the sealed result untouched."""
+    root = output_root / "functional-analysis-failures"
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f"{run.run_id}.json"
+    if target.exists():
+        return
+    payload = {
+        "schema_version": "1.0.0", "run_id": run.run_id, "experiment_id": run.experiment_id,
+        "failure_class": "functional_validation_infrastructure_error", "error_type": type(error).__name__,
+        "error": str(error), "functional_scenario": run.functional_scenario.model_dump(mode="json") if run.functional_scenario else None,
+    }
+    target.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def status(state: ExperimentState) -> dict[str, object]:

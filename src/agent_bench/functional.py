@@ -71,6 +71,21 @@ class FunctionalValidationResult(BaseModel):
     provenance: dict[str, object]
 
 
+class FunctionalBaselineHealth(BaseModel):
+    """Visible pre-run health evidence; distinct from hidden acceptance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0.0"] = FUNCTIONAL_SCHEMA_VERSION
+    scenario_id: str
+    baseline_identity: PortableBaselineIdentity
+    command: tuple[str, ...]
+    status: Literal["passed", "failed", "error"]
+    return_code: int | None
+    stdout_sha256: str | None = None
+    stderr_sha256: str | None = None
+
+
 class FunctionalScenario(BaseModel):
     """Checked-in definition for one functional benchmark scenario."""
 
@@ -189,17 +204,57 @@ def validate_workspace(
     scenario: FunctionalScenario, workspace: Path, run_id: str, output: Path,
 ) -> FunctionalValidationResult:
     """Validate one post-agent workspace without modifying it."""
+    result = evaluate_workspace(scenario, workspace, run_id)
+    _write_new_result(output, result)
+    return result
+
+
+def evaluate_workspace(
+    scenario: FunctionalScenario, workspace: Path, run_id: str,
+) -> FunctionalValidationResult:
+    """Evaluate a workspace without writing an artifact.
+
+    M13 uses this only after restoring a sealed source snapshot into a disposable
+    validator checkout.  The caller owns storage of the resulting immutable
+    analysis artifact.
+    """
     subject = load_frozen_subject(scenario.subject_root)
     root = workspace.expanduser().resolve()
     if not root.is_dir():
         raise FunctionalValidationError(f"workspace is missing: {root}")
     results, runner_provenance = _run_validator(scenario, root)
-    result = _build_result(
+    return _build_result(
         scenario, subject.identity, run_id, "post_run", results, runner_provenance,
-        {"workspace": str(root), "workspace_source_sha256": _directory_digest(root)},
+        {"workspace_source_sha256": _directory_digest(root), "workspace_source": "restored_preserved_snapshot"},
     )
-    _write_new_result(output, result)
-    return result
+
+
+def baseline_health_check(
+    scenario: FunctionalScenario, workspace: Path,
+) -> FunctionalBaselineHealth:
+    """Run only the visible health gate against an already materialized baseline."""
+    subject = load_frozen_subject(scenario.subject_root)
+    root = workspace.expanduser().resolve()
+    if not root.is_dir():
+        raise FunctionalValidationError(f"baseline workspace is missing: {root}")
+    try:
+        raw = yaml.safe_load((scenario.subject_root / "subject.yaml").read_text(encoding="utf-8"))
+        command = raw["commands"]["test"]
+    except (OSError, yaml.YAMLError, KeyError, TypeError) as exc:
+        raise FunctionalValidationError(f"functional baseline health command is invalid: {exc}") from exc
+    if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+        raise FunctionalValidationError("functional baseline health command must be a non-empty string list")
+    try:
+        completed = subprocess.run(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, timeout=30, check=False)
+    except subprocess.TimeoutExpired:
+        return FunctionalBaselineHealth(scenario_id=scenario.scenario_id, baseline_identity=subject.identity, command=tuple(command), status="error", return_code=None)
+    return FunctionalBaselineHealth(
+        scenario_id=scenario.scenario_id, baseline_identity=subject.identity,
+        command=tuple(command), status=("passed" if completed.returncode == 0 else "failed"),
+        return_code=completed.returncode,
+        stdout_sha256=hashlib.sha256(completed.stdout).hexdigest(),
+        stderr_sha256=hashlib.sha256(completed.stderr).hexdigest(),
+    )
 
 
 def self_validate(

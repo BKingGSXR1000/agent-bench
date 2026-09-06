@@ -92,6 +92,10 @@ from agent_bench.functional_suite import (
     self_check_suite,
     suite_summary_text,
 )
+from agent_bench.functional_storage import (
+    FunctionalValidationStorageError,
+    verify_functional_validation_artifact,
+)
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
 from agent_bench.reporting import ReportError, build_report, build_unified_report, export_public, report_status, verify_report
@@ -239,6 +243,26 @@ def functional_self_check(
     except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps([result.model_dump(mode="json") for result in results], ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("verify-result")
+def functional_verify_result(path: Path) -> None:
+    """Verify one sealed functional-validation-v1 artifact."""
+    try:
+        stored = verify_functional_validation_artifact(path)
+    except FunctionalValidationStorageError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(stored.manifest.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("inspect-result")
+def functional_inspect_result(path: Path) -> None:
+    """Read one verified functional-validation-v1 result."""
+    try:
+        stored = verify_functional_validation_artifact(path)
+    except FunctionalValidationStorageError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(stored.result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
 
 
 @experiment_app.command("validate")

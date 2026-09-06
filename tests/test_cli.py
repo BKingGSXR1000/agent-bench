@@ -34,6 +34,14 @@ def test_functional_suite_command_is_listed() -> None:
     assert "--all" in result.output
 
 
+def test_functional_result_artifact_commands_are_listed() -> None:
+    result = runner.invoke(app, ["functional", "--help"])
+
+    assert result.exit_code == 0
+    assert "verify-result" in result.output
+    assert "inspect-result" in result.output
+
+
 def test_cli_version() -> None:
     result = runner.invoke(app, ["--version"])
 
