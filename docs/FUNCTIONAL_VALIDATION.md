@@ -167,6 +167,35 @@ the analysis cannot be sealed. Non-functional historical runs neither create
 nor require this analysis artifact; their definitions, matrix/run IDs, seeds,
 and digests remain unchanged.
 
+## M14 reporting and planned matrix
+
+Reports and matched comparisons expose functional correctness independently:
+status, score numerator/denominator/percent, hard-gate result, baseline
+regression count/flag, failed-test count, scenario, and tier. Reporting verifies
+`functional-validation-v1` and its source link; it never reads loose validator
+JSON. Historical non-functional rows are `not_applicable`, while a configured
+validator problem is `error` or `unavailable`; neither is a functional FAIL.
+
+Variant comparison can select functional score percent or retain a functional
+filter (status, hard gate, tier, and minimum score). Matching remains strict:
+same scenario, exact prompt SHA-256, repetition, and seed. Prompt=All first
+forms those matched strata and only then aggregates.
+
+`functional/experiments/taskboard-functional-v1.yaml` is a planned-only suite
+of three baseline-homogeneous 27-run definitions (Easy, Medium, Complex), for
+81 total rows. Separate definitions are necessary because a run lifecycle has
+one immutable frozen baseline; mixing the three baseline lineages would weaken
+that guarantee. Inspect it without execution:
+
+```sh
+agent-bench functional plan functional/experiments/taskboard-functional-v1.yaml
+```
+
+Recommended interpretation is: compare correctness first; compare reasoning,
+tool behavior, context, and wall/LLM time among hard-gate PASS rows when that
+is the question. No composite efficiency score exists, and a faster or shorter
+reasoning trace is never called better when functional quality differs.
+
 ## Validator self-validation invariant
 
 A functional scenario is not considered validated until all four conditions

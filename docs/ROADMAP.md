@@ -261,6 +261,16 @@ explicit analysis-infrastructure failures and preserve retryable sealed source
 evidence. Historical non-functional experiment identities and lifecycle
 requirements are unchanged. Major report/UI integration remains future work.
 
+## M14 — Functional reporting and planned real matrix
+
+M14 adds functional-validation-v1 as a separate verified reporting and matched
+comparison dimension, including status, score, hard gates, regressions,
+scenario, and tier filters. Legacy non-functional evidence remains explicitly
+not applicable. The first real taskboard matrix is prepared but not executed as
+three baseline-homogeneous 27-run definitions (81 planned runs total), with a
+read-only functional plan command. No composite efficiency score or model run
+is introduced.
+
 ## M11 — Qualitative reasoning export
 
 Optional later phase.

@@ -184,7 +184,7 @@ def _load_functional_association(prompt: dict[str, Any], base_directory: Path, i
         expected_prompt = entry.prompts[raw["prompt_variant"]]
         if expected_prompt.sha256 != prompt["sha256"]:
             raise ExperimentConfigError(f"prompt {index} bytes do not match the suite prompt contract")
-        raw.update({"suite_id": suite.suite_id, "suite_version": suite.suite_version, "suite_manifest_sha256": suite.manifest_sha256})
+        raw.update({"suite_id": suite.suite_id, "suite_version": suite.suite_version, "suite_manifest_sha256": suite.manifest_sha256, "tier": entry.tier})
     prompt["functional_scenario"] = raw
 
 

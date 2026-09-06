@@ -19,6 +19,7 @@ from typing import Any
 from agent_bench.config import ExperimentConfigError, load_experiment
 from agent_bench.context_storage import verify_context_analysis_artifact
 from agent_bench.executor import ExperimentState
+from agent_bench.functional_storage import verify_functional_validation_artifact
 from agent_bench.matrix import expand_experiment
 from agent_bench.metrics import calculate_run_metrics
 from agent_bench.metrics_storage import verify_metrics_artifact
@@ -59,6 +60,10 @@ METRICS = (
     "reasoning.max_continuous_reasoning_chars.value",
     "reasoning.reasoning_time_total_seconds.value",
     "derived.reasoning_to_output_ratio.value",
+    "functional.functional_score_percent",
+    "functional.hard_gate_pass",
+    "functional.baseline_regression_count",
+    "functional.failed_test_count",
 )
 
 
@@ -209,6 +214,8 @@ def _read_definition_root(root: Path, state: ExperimentState, definition: Any) -
         context = verify_context_analysis_artifact(root / "analysis" / run.run_id / "context-analysis-v2")
         _verify_analysis_links(artifact, stored, context, run.run_id)
         values, provenance = _metric_values(stored.metrics, artifact)
+        functional = _functional_values(root, artifact, run)
+        values.update(functional["metrics"]); provenance.update(functional["provenance"])
         rows.append({
             "experiment_id": state.experiment_id, "run_id": run.run_id,
             "harness": run.harness_id, "profile": run.profile_id,
@@ -217,7 +224,7 @@ def _read_definition_root(root: Path, state: ExperimentState, definition: Any) -
             "semantic_task": run.semantic_task_id, "prompt_id": run.prompt_id,
             "prompt_sha256": run.prompt_sha256, "prompt_variant": next(p.variant_label for p in definition.prompts if p.prompt_id == run.prompt_id),
             "repetition": run.repetition_index, "seed": manifest.run_seed if manifest.run_seed is not None else run.generation_seed,
-            "metrics": values, "metric_provenance": provenance,
+            "metrics": values, "metric_provenance": provenance, **functional["fields"],
         })
     fixed = definition.fixed_environment
     return {
@@ -365,6 +372,37 @@ def _verify_analysis_links(artifact: Path, stored: Any, context: Any, run_id: st
         or context.source_artifact_manifest_sha256 != artifact_sha
     ):
         raise ComparisonError(f"analysis provenance does not link to sealed run artifact: {run_id}")
+
+
+def _functional_values(root: Path, artifact: Path, run: Any) -> dict[str, Any]:
+    """Return a separate correctness dimension; old runs are not failures."""
+    names = ("functional.functional_score_percent", "functional.hard_gate_pass", "functional.baseline_regression_count", "functional.failed_test_count")
+    if getattr(run, "functional_scenario", None) is None:
+        return {"metrics": {name: None for name in names}, "provenance": {name: "not_applicable_nonfunctional" for name in names}, "fields": {"functional_validation_status": "not_applicable", "functional_scenario_id": None, "functional_tier": None, "hard_gate_pass": None, "functional_score_percent": None}}
+    stored = verify_functional_validation_artifact(root / "analysis" / run.run_id / "functional-validation-v1")
+    record = stored.result
+    artifact_sha = hashlib.sha256((artifact / "manifest.json").read_bytes()).hexdigest()
+    run_manifest_sha = hashlib.sha256((artifact / "run" / "manifest.json").read_bytes()).hexdigest()
+    sealed = verify_artifact(artifact)
+    if (
+        record.run_id != run.run_id
+        or record.source_artifact_manifest_sha256 != artifact_sha
+        or record.source_snapshot_sha256 != sealed.source_snapshot_sha256
+        or record.source_run_manifest_sha256 != run_manifest_sha
+    ):
+        raise ComparisonError(f"functional artifact does not link to sealed run: {run.run_id}")
+    result = record.functional_result
+    available = record.validation_status in {"pass", "fail"}
+    return {
+        "metrics": {
+            "functional.functional_score_percent": result.score_percent if available else None,
+            "functional.hard_gate_pass": 1 if result.hard_gate_pass and available else (0 if available else None),
+            "functional.baseline_regression_count": result.baseline_regression["failed"],
+            "functional.failed_test_count": result.failed_tests,
+        },
+        "provenance": {name: "functional-validation-v1" for name in names},
+        "fields": {"functional_validation_status": record.validation_status, "functional_scenario_id": record.scenario.scenario_id, "functional_tier": record.scenario.tier, "hard_gate_pass": result.hard_gate_pass if available else None, "functional_score_percent": result.score_percent if available else None},
+    }
 
 
 def _metric_values(metrics: Any, artifact: Path) -> tuple[dict[str, float | int | None], dict[str, str]]:

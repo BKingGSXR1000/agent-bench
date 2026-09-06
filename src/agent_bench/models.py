@@ -263,6 +263,7 @@ class FunctionalScenarioAssociation(PersistedModel):
     validator_version: str = Field(min_length=1)
     validator_sha256: Sha256
     prompt_variant: Literal["vague", "normal", "precise"]
+    tier: Literal["easy", "medium", "complex"] | None = None
     suite_id: Identifier | None = None
     suite_version: str | None = None
     suite_manifest_sha256: Sha256 | None = None
@@ -282,6 +283,7 @@ class FunctionalScenarioAssociation(PersistedModel):
             "validator_version": self.validator_version,
             "validator_sha256": self.validator_sha256,
             "prompt_variant": self.prompt_variant,
+            "tier": self.tier,
             "suite_id": self.suite_id,
             "suite_version": self.suite_version,
             "suite_manifest_sha256": self.suite_manifest_sha256,

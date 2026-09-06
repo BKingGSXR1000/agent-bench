@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
 from pydantic import TypeAdapter
 
 from agent_bench import __version__
@@ -47,7 +48,7 @@ from agent_bench.context_storage import (
     store_context_analysis_artifact,
     verify_context_analysis_artifact,
 )
-from agent_bench.models import ExperimentDefinition, Identifier
+from agent_bench.models import ExperimentDefinition, Identifier, canonical_sha256
 from agent_bench.opencode import (
     OpenCodeError,
     load_opencode_profile,
@@ -263,6 +264,37 @@ def functional_inspect_result(path: Path) -> None:
     except FunctionalValidationStorageError as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(stored.result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("plan")
+def functional_plan(path: Path) -> None:
+    """Expand a planned functional suite without starting a harness or backend."""
+    suite_path = path.expanduser().resolve()
+    try:
+        raw = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+        members = raw["members"]
+        if not isinstance(members, list):
+            raise ValueError("members must be a list")
+        entries = []
+        for member in members:
+            definition = load_experiment((suite_path.parent / member["experiment_definition"]).resolve())
+            runs = expand_experiment(definition)
+            if len(runs) != member["expected_runs"]:
+                raise ValueError(f"unexpected expansion count for {definition.experiment_id}")
+            if {run.functional_scenario.scenario_id for run in runs} != {member["scenario_id"]}:
+                raise ValueError(f"scenario association disagrees with suite member for {definition.experiment_id}")
+            if {run.functional_scenario.tier for run in runs} != {member["tier"]}:
+                raise ValueError(f"tier association disagrees with suite member for {definition.experiment_id}")
+            serialized_runs = [item.model_dump(mode="json", exclude={"definition_digest"}) for item in runs]
+            association = runs[0].functional_scenario
+            entries.append({"tier": member["tier"], "scenario_id": member["scenario_id"], "experiment_id": definition.experiment_id, "definition_digest": definition.definition_digest, "expansion_digest": canonical_sha256(serialized_runs), "baseline": definition.portable_baseline.model_dump(mode="json", exclude={"definition_digest"}), "scenario_contract": association.model_dump(mode="json"), "runs": serialized_runs})
+        all_runs = [run for entry in entries for run in entry["runs"]]
+        if len(all_runs) != raw["total_runs"]:
+            raise ValueError("suite total_runs does not match expanded definitions")
+        payload = {"schema_version": "1.0.0", "suite_id": raw["suite_id"], "suite_version": raw["suite_version"], "total_runs": len(all_runs), "by_harness": {name: sum(item["harness_id"] == name for item in all_runs) for name in ("hermes", "opencode", "pi")}, "by_tier": {entry["tier"]: len(entry["runs"]) for entry in entries}, "members": entries}
+    except (OSError, ValueError, KeyError, ExperimentConfigError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
 @experiment_app.command("validate")
