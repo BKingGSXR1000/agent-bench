@@ -37,6 +37,7 @@ def _fake_hermes(
     exit_code: int = 0,
     wait: bool = False,
     usage_bytes: bytes | None = DEFAULT_USAGE_BYTES,
+    final_unexecuted_tool: bool = False,
 ) -> Path:
     delay = "time.sleep(30)" if wait else ""
     write_usage = usage_bytes is not None
@@ -55,13 +56,15 @@ usage_path = pathlib.Path(sys.argv[sys.argv.index('--usage-file') + 1])
 home = pathlib.Path(os.environ['HERMES_HOME']); home.mkdir(parents=True, exist_ok=True)
 (pathlib.Path(os.environ['HOME']) / '.home-marker').write_text('isolated', encoding='utf-8')
 db = sqlite3.connect(home / 'state.db')
-db.execute('CREATE TABLE sessions (id TEXT, started_at REAL)')
+db.execute('CREATE TABLE sessions (id TEXT, started_at REAL, cwd TEXT)')
 db.execute('CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, effect_disposition TEXT, timestamp REAL, token_count INTEGER, finish_reason TEXT, reasoning TEXT, reasoning_content TEXT, compacted INTEGER)')
-db.execute('INSERT INTO sessions VALUES (?,?)', ('hermes-fixture-session', 1.0))
+db.execute('INSERT INTO sessions VALUES (?,?,?)', ('hermes-fixture-session', 1.0, str(pathlib.Path.cwd())))
 db.execute('INSERT INTO messages (session_id,role,content,timestamp) VALUES (?,?,?,?)', ('hermes-fixture-session','user',prompt,1.0))
 calls=json.dumps([{{'id':'read-1','function':{{'name':'read_file','arguments':json.dumps({{'path':str(pathlib.Path.cwd() / 'README.md')}})}}}},{{'id':'edit-1','function':{{'name':'edit_file','arguments':json.dumps({{'path':str(pathlib.Path.cwd() / 'README.md')}})}}}},{{'id':'test-1','function':{{'name':'terminal','arguments':json.dumps({{'command':'pytest -q'}})}}}}])
 db.execute('INSERT INTO messages (session_id,role,content,tool_calls,reasoning_content,timestamp) VALUES (?,?,?,?,?,?)', ('hermes-fixture-session','assistant','',calls,'inspect then edit',2.0))
 for call_id, name in [('read-1','read_file'),('edit-1','edit_file'),('test-1','terminal')]: db.execute('INSERT INTO messages (session_id,role,content,tool_call_id,tool_name,effect_disposition,timestamp) VALUES (?,?,?,?,?,?,?)', ('hermes-fixture-session','tool','ok',call_id,name,'success',3.0))
+if {final_unexecuted_tool!r}:
+    db.execute('INSERT INTO messages (session_id,role,content,tool_calls,finish_reason,timestamp) VALUES (?,?,?,?,?,?)', ('hermes-fixture-session','assistant','last visible output',json.dumps([{{'id':'unexecuted-1','function':{{'name':'patch','arguments':json.dumps({{'path':'README.md'}})}}}}]),'tool_calls',4.0))
 db.execute('INSERT INTO messages (session_id,role,content,compacted,timestamp) VALUES (?,?,?,?,?)', ('hermes-fixture-session','assistant','summary',1,4.0))
 db.commit(); db.close()
 pathlib.Path('README.md').write_text('status: complete\\n', encoding='utf-8')
@@ -169,13 +172,15 @@ def test_native_normalization_recognizes_upstream_patch_and_search_files(tmp_pat
         {'id': 'patch', 'function': {'name': 'patch', 'arguments': json.dumps({'path': '/tmp/work/README.md', 'old_string': 'pending', 'new_string': 'complete'})}},
     ]
     writer.emit(source='harness', event_type='hermes_session_message', payload={'native_event': {'role': 'assistant', 'timestamp': 123.5, 'tool_calls': json.dumps(calls)}})
+    writer.emit(source='harness', event_type='hermes_session_message', payload={'native_event': {'role':'tool', 'tool_call_id':'search', 'tool_name':'search_files', 'content':'ok', 'timestamp':124.0}})
     writer.seal()
     normalized_path = tmp_path / 'normalized.jsonl'; normalize_hermes_events(raw_path, normalized_path)
     starts = [event for event in load_normalized_events(normalized_path) if event.event_kind == 'tool_call_start']
-    assert [event.payload['category'] for event in starts] == ['search', 'edit']
-    assert starts[1].payload['path'] == 'README.md'
-    assert starts[0].payload['timing_semantics'] == 'tool_call_recorded_then_exported'
-    assert starts[0].payload['native_message_timestamp_seconds'] == 123.5
+    assert [event.payload['category'] for event in starts] == ['search']
+    intents = [event for event in load_normalized_events(normalized_path) if event.event_kind == 'model_tool_call_observed']
+    assert [event.payload['tool_name'] for event in intents] == ['search_files', 'patch']
+    assert starts[0].payload['timing_semantics'] == 'tool_execution_inferred_from_result_then_exported'
+    assert starts[0].payload['native_message_timestamp_seconds'] == 124.0
 
 
 def test_adapter_preserves_native_session_prompt_and_events(tmp_path: Path, git_repository: GitRepositoryFixture, run_fixture: RunFixture) -> None:
@@ -198,6 +203,9 @@ def test_adapter_preserves_native_session_prompt_and_events(tmp_path: Path, git_
     assert validation.payload['exact_prompt_found'] is True
     assert {event.event_kind for event in normalized} >= {'reasoning','file_read','file_edit','test_execution','compaction_end'}
     assert hermes_capture_capabilities().session_identity == 'harness_exact'
+    metrics = calculate_run_metrics(result.artifact_path)
+    assert metrics.behavior.tool_calls_total.value == 3
+    assert metrics.behavior.tool_calls_successful.value == 3
 
 
 def test_usage_evidence_is_stable_after_live_file_is_removed(
@@ -262,3 +270,30 @@ def test_adapter_crash_and_timeout_are_preserved(tmp_path: Path, git_repository:
         definition = run_fixture.run_definition.model_copy(update={'run_id':f'hermes-fixture-{label}','harness_id':'hermes','profile_id':'hermes-default-v1','limits':RunLimits(wall_timeout_seconds=timeout),'prompt_sha256':EXACT_PROMPT_SHA256})
         result = execute_run(run_definition=definition, prompt_content=EXACT_PROMPT, adapter=HermesAdapter(_profile_for(executable), verify_toolchain=False), artifacts_root=git_repository.artifacts_root, worktrees_root=git_repository.worktrees_root, isolation_root=tmp_path / f'{label}-isolation', proxy_endpoint='http://127.0.0.1:18081/v1', run_seed=1001)
         assert result.run_manifest.observed_execution_outcome == expected
+
+
+def test_timeout_extracts_completed_tools_but_not_final_unexecuted_intent(tmp_path: Path, git_repository: GitRepositoryFixture, run_fixture: RunFixture) -> None:
+    executable = _fake_hermes(
+        tmp_path / 'timeout-session', wait=True, usage_bytes=None,
+        final_unexecuted_tool=True,
+    )
+    definition = run_fixture.run_definition.model_copy(update={
+        'run_id': 'hermes-fixture-timeout-session', 'harness_id': 'hermes',
+        'profile_id': 'hermes-default-v1', 'limits': RunLimits(wall_timeout_seconds=.5),
+        'prompt_sha256': EXACT_PROMPT_SHA256,
+    })
+    result = execute_run(run_definition=definition, prompt_content=EXACT_PROMPT,
+        adapter=HermesAdapter(_profile_for(executable), verify_toolchain=False),
+        artifacts_root=git_repository.artifacts_root, worktrees_root=git_repository.worktrees_root,
+        isolation_root=tmp_path / 'timeout-isolation', proxy_endpoint='http://127.0.0.1:18081/v1', run_seed=1001)
+    raw = load_raw_events(result.raw_event_path)
+    events = load_normalized_events(result.normalized_event_path)
+    metrics = calculate_run_metrics(result.artifact_path)
+    assert result.run_manifest.observed_execution_outcome == 'timeout'
+    assert next(event for event in raw if event.event_type == 'hermes_capture_status').payload['tool_capture_complete'] is True
+    assert len([event for event in events if event.event_kind == 'tool_call_start']) == 3
+    assert len([event for event in events if event.event_kind == 'tool_call_end']) == 3
+    assert any(event.event_kind == 'model_tool_call_observed' and event.payload['tool_call_id'] == 'unexecuted-1' for event in events)
+    assert not any(event.event_kind == 'tool_call_start' and event.payload['tool_call_id'] == 'unexecuted-1' for event in events)
+    assert metrics.behavior.tool_calls_total.value == 3
+    assert metrics.termination.termination_class == 'timeout'

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from agent_bench.cli import app
-from agent_bench.events import load_normalized_events, load_raw_events
+from agent_bench.events import RawEvent, load_normalized_events, load_raw_events
 from agent_bench.fake_harness import FakeHarness
 from agent_bench.metric_models import RunMetrics
 from agent_bench.models import canonical_sha256
@@ -19,6 +20,7 @@ from agent_bench.metrics import (
     _correlate_tools,
     _divide_metrics,
     _interval_sum,
+    _hermes_timeout_tool_capture_complete,
     _model_exchange_events,
     _response_behavior_metrics,
     _token_metric,
@@ -298,6 +300,17 @@ def test_incomplete_interval_is_unavailable_not_a_partial_sum(metrics_run: objec
 
     assert metric.value is None
     assert metric.unavailable_reason == "capture_incomplete"
+
+
+def test_unqualified_hermes_timeout_never_reports_exact_zero_tools() -> None:
+    raw = RawEvent.create(
+        raw_event_id="hermes-timeout:raw:1", run_id="hermes-timeout", sequence=1,
+        timestamp_utc=datetime(2026, 1, 1, tzinfo=timezone.utc), source="runner", event_type="timeout", payload={},
+    )
+    assert _hermes_timeout_tool_capture_complete((raw,)) is False
+    behavior = _calculate_behavior((), (), False, True, [], complete_tool_capture=False)
+    assert behavior.tool_calls_total.value is None
+    assert behavior.tool_calls_total.unavailable_reason == "capture_incomplete"
 
 
 def test_missing_context_observation_keeps_point_but_invalidates_aggregates(metrics_run: object) -> None:

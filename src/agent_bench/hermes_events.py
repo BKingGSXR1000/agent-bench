@@ -10,8 +10,8 @@ from agent_bench.events import DerivedEvent, RawEvent, normalize_raw_events
 from agent_bench.models import JsonMapping, canonical_sha256
 
 HERMES_NORMALIZER_NAME = "agent-bench-hermes"
-HERMES_NORMALIZER_VERSION = "1.0.3"
-_COMMON_TYPES = frozenset({"run_start", "run_end", "llm_request", "llm_response", "reasoning", "tool_call_start", "tool_call_end", "file_read", "file_search", "file_edit", "file_write", "shell_command", "test_execution", "compaction_start", "compaction_end", "output_truncation", "context_overflow", "harness_error", "backend_error", "timeout", "process_termination"})
+HERMES_NORMALIZER_VERSION = "1.0.4"
+_COMMON_TYPES = frozenset({"run_start", "run_end", "llm_request", "llm_response", "model_tool_call_observed", "reasoning", "tool_call_start", "tool_call_end", "file_read", "file_search", "file_edit", "file_write", "shell_command", "test_execution", "compaction_start", "compaction_end", "output_truncation", "context_overflow", "harness_error", "backend_error", "timeout", "process_termination"})
 _TOOL_CATEGORIES = {"read_file": "read", "read": "read", "grep": "search", "search": "search", "search_files": "search", "find": "search", "glob": "search", "list_files": "search", "write_file": "write", "write": "write", "edit_file": "edit", "edit": "edit", "patch": "edit", "apply_patch": "edit", "terminal": "shell", "terminal_tool": "shell", "bash": "shell", "shell": "shell", "execute_command": "shell"}
 HERMES_NORMALIZER_CONFIGURATION_DIGEST = canonical_sha256({"normalizer": HERMES_NORMALIZER_NAME, "version": HERMES_NORMALIZER_VERSION, "common_types": sorted(_COMMON_TYPES), "tool_categories": _TOOL_CATEGORIES, "native_event_type": "hermes_session_message", "test_classifier": "hermes-shell-test-v1"})
 
@@ -20,6 +20,7 @@ class _HermesTransformer:
     def __init__(self) -> None:
         self._workspace: str | None = None
         self._started: set[str] = set()
+        self._proposed: dict[str, tuple[str, dict[str, object], object]] = {}
 
     def __call__(self, raw: RawEvent) -> tuple[DerivedEvent, ...]:
         if raw.event_type == "run_start":
@@ -50,12 +51,16 @@ class _HermesTransformer:
             for call in _tool_calls(native.get("tool_calls")):
                 call_id, name, arguments = _call_parts(call)
                 if not call_id or not name: continue
-                events.extend(
-                    self._tool_start(
-                        call_id,
-                        name,
-                        arguments,
-                        native.get("timestamp"),
+                # This is a model proposal, not evidence that Hermes ran it.
+                # A tool-role record is required before it contributes to the
+                # executed-tool stream and metrics.
+                self._proposed[call_id] = (name, arguments, native.get("timestamp"))
+                events.append(
+                    DerivedEvent(
+                        "model_tool_call_observed",
+                        {"tool_call_id": call_id, "tool_name": name, "arguments": arguments,
+                         "timing_semantics": "model_tool_call_recorded_then_exported"},
+                        "parsed",
                     )
                 )
             finish = native.get("finish_reason")
@@ -64,6 +69,11 @@ class _HermesTransformer:
         if role == "tool":
             call_id = native.get("tool_call_id")
             if isinstance(call_id, str) and call_id:
+                proposed = self._proposed.get(call_id)
+                name = proposed[0] if proposed is not None else native.get("tool_name")
+                arguments = proposed[1] if proposed is not None else {}
+                if isinstance(name, str) and name:
+                    events.extend(self._tool_start(call_id, name, arguments, native.get("timestamp")))
                 payload: JsonMapping = {
                     "tool_call_id": call_id,
                     "outcome": "failure" if native.get("effect_disposition") in {"error", "failure"} else "success",
@@ -72,6 +82,7 @@ class _HermesTransformer:
                     # one-shot process exits.  This is a recorded result
                     # timestamp, not an execution-end timestamp.
                     "timing_semantics": "tool_result_recorded_then_exported",
+                    "execution_evidence": "native_tool_result_record",
                 }
                 timestamp = native.get("timestamp")
                 if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
@@ -97,11 +108,11 @@ class _HermesTransformer:
             "tool_name": name,
             "category": category,
             "arguments": arguments,
-            # The assistant message contains a requested tool call, but the
-            # persisted Hermes SQLite export is emitted only after process
-            # completion.  Its capture timestamp must not be treated as a
-            # harness execution-start time.
-            "timing_semantics": "tool_call_recorded_then_exported",
+            # This start is emitted only after a native tool-result record
+            # proves execution. Its timestamp is still not an execution-start
+            # timestamp: SQLite is exported after process completion.
+            "timing_semantics": "tool_execution_inferred_from_result_then_exported",
+            "execution_evidence": "native_tool_result_record",
         }
         if isinstance(native_timestamp, (int, float)) and not isinstance(native_timestamp, bool):
             payload["native_message_timestamp_seconds"] = native_timestamp

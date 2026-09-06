@@ -59,6 +59,7 @@ METRICS_CONFIGURATION = {
     "path_classifier": "agent-bench-path-classifier-v1",
     "tool_timing": "explicit-execution-boundary-only-v1",
     "response_behavior": "proxy-final-response-exact-v1",
+    "hermes_timeout_tool_capture": "qualified_session_extraction_status-v1",
     "completion_integrity": SELF_REPORT_METHOD,
     "termination_precedence": [
         "precondition_failed",
@@ -163,6 +164,11 @@ def calculate_run_metrics(
             and capabilities.tool_results == "harness_exact"
         )
     )
+    if run_manifest.adapter_id == "hermes" and run_manifest.observed_execution_outcome == "timeout":
+        # Static adapter capabilities describe what a completed Hermes export
+        # can provide. A timeout is exact only when the adapter sealed a
+        # session-selection-qualified extraction after termination.
+        complete_tool_capture = complete_tool_capture and _hermes_timeout_tool_capture_complete(raw_events)
     complete_compaction_capture = (
         run_manifest.adapter_id == "fake-harness"
         or (capabilities is not None and capabilities.compaction_events != "unavailable")
@@ -566,10 +572,13 @@ def _calculate_tokens_and_context(
             events=tuple(point.request_event_id for point in context_points),
         )
     else:
-        peak_tokens = _unavailable("tokens", "source_not_exposed")
-        peak_util = _unavailable("percent", "source_not_exposed")
+        reason = "capture_incomplete" if not complete_llm_capture else "source_not_exposed"
+        peak_tokens = _unavailable("tokens", reason)
+        peak_util = _unavailable("percent", reason)
     if len(context_points) < 2:
         net_growth = _not_applicable("tokens")
+    elif not complete_context:
+        net_growth = _unavailable("tokens", "capture_incomplete" if not complete_llm_capture else "source_not_exposed")
     else:
         net_growth = _subtract_metrics(
             context_points[-1].context_used_tokens,
@@ -1066,6 +1075,18 @@ def _validate_event_provenance(
                 )
 
 
+def _hermes_timeout_tool_capture_complete(raw_events: tuple[RawEvent, ...]) -> bool:
+    """Return whether a timed-out Hermes run sealed a qualified session export."""
+    statuses = [
+        event.payload
+        for event in raw_events
+        if event.event_type == "hermes_capture_status"
+    ]
+    if len(statuses) != 1:
+        return False
+    return statuses[0].get("tool_capture_complete") is True
+
+
 def _correlate_tools(events: tuple[NormalizedEvent, ...], diagnostics: list[str]) -> tuple[_ToolCall, ...]:
     ends: dict[str, NormalizedEvent] = {}
     for event in events:
@@ -1241,7 +1262,7 @@ def _aggregate_tokens(values: list[int], complete: bool, source_events: list[Nor
     if not source_events:
         return _unavailable("tokens", "source_not_exposed")
     if not complete or len(values) != len(source_events):
-        return _unavailable("tokens", "source_not_exposed", events=tuple(event.event_id for event in source_events))
+        return _unavailable("tokens", "capture_incomplete", events=tuple(event.event_id for event in source_events))
     methods = tuple(
         sorted(
             {
@@ -1336,8 +1357,16 @@ def _calculate_reasoning_metrics(
     chars_total = _available(sum(block.characters for block in blocks), "characters", "deterministically_calculated", events=evidence)
     max_chars = _available(max(block.characters for block in blocks), "characters", "deterministically_calculated", events=evidence)
 
-    tool_boundary = next((event.sequence for event in events if event.event_kind == "tool_call_start"), None)
-    edit_boundary = next((event.sequence for event in events if event.event_kind == "tool_call_start" and event.payload.get("category") in {"edit", "write"}), None)
+    def model_intent_category(event: NormalizedEvent) -> str | None:
+        if event.event_kind == "tool_call_start":
+            return event.payload.get("category") if isinstance(event.payload.get("category"), str) else None
+        if event.event_kind == "model_tool_call_observed":
+            name = event.payload.get("tool_name")
+            return {"edit_file": "edit", "edit": "edit", "patch": "edit", "apply_patch": "edit", "write_file": "write", "write": "write"}.get(name) if isinstance(name, str) else None
+        return None
+
+    tool_boundary = next((event.sequence for event in events if event.event_kind in {"tool_call_start", "model_tool_call_observed"}), None)
+    edit_boundary = next((event.sequence for event in events if model_intent_category(event) in {"edit", "write"}), None)
 
     def chars_before(boundary: int | None) -> ScalarMetric:
         if boundary is None:

@@ -315,6 +315,7 @@ def hermes_capture_capabilities() -> CaptureCapabilities:
         notes=(
             "Proxy request and response bodies remain authoritative for model traffic and parameters.",
             "Hermes's isolated SQLite session provides persisted user/assistant/tool records, including reasoning_content when exposed.",
+            "On timeout, harness-exact tool metrics require a sealed hermes_capture_status record with an exact session selection; otherwise tool aggregates are unavailable.",
             "The oneshot usage file provides session identity and aggregate native usage; post-Jinja prompt bytes remain unavailable.",
         ),
     )
@@ -371,18 +372,40 @@ class HermesAdapter:
         if errors:
             raise HermesError(f"Hermes output capture failed: {errors[0]}")
         usage_capture = evidence_root / "usage-captured.json"
-        _, usage = _capture_usage_file(usage_file, usage_capture)
-        _write_json(evidence_root / "usage-observed.json", usage)
+        usage: dict[str, object] = {}
+        usage_capture_error: str | None = None
         try:
+            _, usage = _capture_usage_file(usage_file, usage_capture)
+            _write_json(evidence_root / "usage-observed.json", usage)
             usage_file.unlink()
+        except HermesError as exc:
+            if not cancelled:
+                raise
+            usage_capture_error = str(exc)
+            _write_json(evidence_root / "usage-observed.json", {"available": False, "reason": "process_terminated_before_usage_file", "detail": usage_capture_error})
         except OSError as exc:
-            raise HermesError(
-                f"cannot remove captured Hermes usage file {usage_file}: {exc}"
-            ) from exc
+            if not cancelled:
+                raise HermesError(f"cannot remove captured Hermes usage file {usage_file}: {exc}") from exc
+            usage_capture_error = str(exc)
+            _write_json(evidence_root / "usage-observed.json", {"available": False, "reason": "usage_cleanup_failed_after_timeout", "detail": usage_capture_error})
         session_id = usage.get("session_id") if isinstance(usage.get("session_id"), str) else None
-        records = _export_session_records(hermes_home / "state.db", session_id)
+        records = _export_session_records(
+            hermes_home / "state.db", session_id, workspace=context.paths.workspace
+        )
         _write_json(evidence_root / "session-records.json", records)
         _emit_native_records(context, records, prompt_sha256)
+        tool_capture_complete = bool(records.get("session_selection_exact")) and not bool(records.get("schema_error"))
+        context.events.emit(
+            source="harness",
+            event_type="hermes_capture_status",
+            payload={
+                "tool_capture_complete": tool_capture_complete,
+                "session_records_available": bool(records.get("database_present")),
+                "session_selection": records.get("session_selection"),
+                "usage_capture_available": usage_capture_error is None,
+                "usage_capture_error": usage_capture_error,
+            },
+        )
         output_truncated = any(row.get("finish_reason") in {"length", "max_tokens", "max_output_tokens"} for row in records.get("messages", []) if isinstance(row, dict))
         context.events.emit(source="harness", event_type="hermes_end", payload={"return_code": return_code, "cancelled": cancelled, "session_id": session_id, "usage": usage, "output_truncated": output_truncated})
         return HarnessExecutionResult(completed_normally=return_code == 0 and not cancelled, output_truncated=output_truncated, exit_code=return_code, session_id=session_id, evidence_files=self._evidence_files(context, evidence_root))
@@ -401,9 +424,12 @@ class HermesAdapter:
         records: dict[str, Path] = {
             "raw/hermes/stdout.log": evidence_root / "stdout.log", "raw/hermes/stderr.log": evidence_root / "stderr.log",
             "raw/hermes/prompt-transport.bin": evidence_root / "prompt-transport.bin", "raw/hermes/invocation.json": evidence_root / "invocation.json",
-            "raw/hermes/usage.json": evidence_root / "usage-captured.json", "raw/hermes/usage-observed.json": evidence_root / "usage-observed.json",
+            "raw/hermes/usage-observed.json": evidence_root / "usage-observed.json",
             "raw/hermes/session-records.json": evidence_root / "session-records.json",
         }
+        usage_capture = evidence_root / "usage-captured.json"
+        if usage_capture.is_file():
+            records["raw/hermes/usage.json"] = usage_capture
         for source in sorted((context.paths.harness_state / "hermes-home").rglob("*")):
             if source.is_file() and not source.is_symlink(): records[f"run/hermes/home/{source.relative_to(context.paths.harness_state / 'hermes-home').as_posix()}"] = source
         for label, root in (("home", context.paths.home), ("config", context.paths.xdg_config_home), ("cache", context.paths.xdg_cache_home), ("data", context.paths.xdg_data_home), ("state", context.paths.xdg_state_home)):
@@ -428,7 +454,9 @@ def _emit_native_records(context: HarnessRunContext, records: dict[str, object],
         context.events.emit(source="harness", event_type="harness_error", payload={"error_type": "invalid_harness_output", "message": "Hermes session did not contain exact prompt bytes"})
 
 
-def _export_session_records(database: Path, session_id: str | None) -> dict[str, object]:
+def _export_session_records(
+    database: Path, session_id: str | None, *, workspace: Path | None = None,
+) -> dict[str, object]:
     if not database.is_file():
         return {"database_present": False, "sessions": [], "messages": []}
     try:
@@ -437,14 +465,28 @@ def _export_session_records(database: Path, session_id: str | None) -> dict[str,
         tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "sessions" not in tables or "messages" not in tables:
             return {"database_present": True, "sessions": [], "messages": [], "schema_error": "required tables unavailable"}
-        where, params = ("WHERE id = ?", (session_id,)) if session_id else ("", ())
+        selection = "usage_session_id" if session_id else "unavailable"
+        where, params = ("WHERE id = ?", (session_id,)) if session_id else ("WHERE 0", ())
         sessions = [_row_to_json(row) for row in connection.execute(f"SELECT * FROM sessions {where} ORDER BY started_at, id", params)]
+        # A timeout can prevent Hermes from writing its usage file even though
+        # SQLite contains a fully persisted session.  The run workspace is an
+        # isolated, exact session discriminator; use it only when it selects
+        # exactly one session, never "the latest" session.
+        if not sessions and session_id is None and workspace is not None:
+            candidates = [_row_to_json(row) for row in connection.execute(
+                "SELECT * FROM sessions WHERE cwd = ? ORDER BY started_at, id", (str(workspace),)
+            )]
+            if len(candidates) == 1:
+                sessions = candidates
+                selection = "isolated_workspace_exact"
+            elif candidates:
+                selection = "isolated_workspace_ambiguous"
         ids = [row.get("id") for row in sessions if isinstance(row.get("id"), str)]
         if not ids:
-            return {"database_present": True, "sessions": sessions, "messages": []}
+            return {"database_present": True, "sessions": sessions, "messages": [], "session_selection": selection, "session_selection_exact": False}
         placeholders = ",".join("?" for _ in ids)
         messages = [_row_to_json(row) for row in connection.execute(f"SELECT * FROM messages WHERE session_id IN ({placeholders}) ORDER BY id", ids)]
-        return {"database_present": True, "sessions": sessions, "messages": messages}
+        return {"database_present": True, "sessions": sessions, "messages": messages, "session_selection": selection, "session_selection_exact": True}
     except sqlite3.Error as exc:
         return {"database_present": True, "sessions": [], "messages": [], "schema_error": str(exc)}
     finally:

@@ -29,6 +29,7 @@ from agent_bench.reporting import (
     concise_chart_series_labels,
     build_unified_report,
     _variant_observation_counts,
+    _observed_before_termination,
 )
 from agent_bench.executor import ExperimentState, RunProgress
 from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
@@ -54,6 +55,45 @@ def test_type7_quantiles_and_n1_are_deterministic() -> None:
     assert quantile_type7([1, 2, 3], .25) == 1.5
     assert quantile_type7([9], .25) == quantile_type7([9], .75) == 9
     assert quantile_type7([], .5) is None
+
+
+def test_partial_observations_sum_only_available_request_metrics() -> None:
+    metric = lambda value: {"availability": "available", "value": value}
+    absent = {"availability": "unavailable", "value": None}
+    metrics = {
+        "tokens": {"total_tokens": absent, "tokens_per_llm_request": [
+            {"input_tokens": metric(10), "output_tokens": metric(3), "total_tokens": metric(13)},
+            {"input_tokens": metric(20), "output_tokens": absent, "total_tokens": absent},
+            {"input_tokens": absent, "output_tokens": metric(7), "total_tokens": absent},
+        ]},
+        "context": {"context_used_per_request": [
+            {"request_index": 1, "context_used_tokens": metric(10), "context_utilization_percent": metric(1.0)},
+            {"request_index": 2, "context_used_tokens": absent, "context_utilization_percent": absent},
+            {"request_index": 3, "context_used_tokens": metric(40), "context_utilization_percent": metric(4.0)},
+        ]},
+    }
+    observed = _observed_before_termination(metrics)
+    assert observed is not None
+    assert observed["input_usage"] == {"available": 2, "observed": 3, "sum": 30}
+    assert observed["output_usage"] == {"available": 2, "observed": 3, "sum": 10}
+    assert observed["total_usage"] == {"available": 1, "observed": 3, "sum": 13}
+    assert observed["maximum_observed_context_tokens"] == 40
+    assert observed["last_observed_context_tokens"] == 40
+    assert observed["observed_context_growth_tokens"] == 30
+
+
+def test_partial_observations_do_not_render_zero_for_no_available_values() -> None:
+    absent = {"availability": "unavailable", "value": None}
+    observed = _observed_before_termination({
+        "tokens": {"total_tokens": absent, "tokens_per_llm_request": [
+            {"input_tokens": absent, "output_tokens": absent, "total_tokens": absent},
+        ]},
+        "context": {"context_used_per_request": [{"request_index": 1, "context_used_tokens": absent, "context_utilization_percent": absent}]},
+    })
+    assert observed is not None
+    assert observed["input_usage"]["sum"] is None
+    assert observed["output_usage"]["sum"] is None
+    assert observed["maximum_observed_context_tokens"] is None
 
 
 def test_variant_common_strata_do_not_mislabel_another_variant_absence_as_unavailable() -> None:
@@ -493,6 +533,20 @@ def test_dashboard_renders_visible_final_and_abnormal_last_model_output() -> Non
     assert "Last captured model output before termination" in output
     assert "I updated the feature and need one final check." in output
     assert "data-final-model-response${open}" in output
+
+
+def test_dashboard_uses_specific_unavailable_wording_and_partial_section() -> None:
+    output = _html_report({"experiment_id": "synthetic-v1"}, {
+        "generator": {"name": "test", "version": "test", "agent_bench_version": "test"},
+        "experiment_id": "synthetic-v1", "definition_digest": "d" * 64, "expansion_digest": "e" * 64,
+        "completion": {"total": 1, "completed": 1, "failed": 0, "interrupted": 0, "invalid": 0, "pending": 0, "is_partial": False},
+        "definition": {"repetitions": 1, "harnesses": [], "profiles": [], "prompts": [], "fixed_environment": {}, "backend_configuration": {}},
+        "summary_environment": {}, "runs": [], "summaries": [], "curves": [], "markers": [], "failures": [], "data_files": [],
+        "details": {},
+    })
+    assert "Unavailable — run/capture incomplete" in output
+    assert "Unavailable — harness does not expose native execution timestamps" in output
+    assert "Observed before termination" in output
 
 
 def test_static_dashboard_offers_runnable_results_without_requiring_a_server() -> None:
