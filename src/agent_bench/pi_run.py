@@ -17,6 +17,7 @@ from agent_bench.backend import (
     OwnedBackendProcess,
     load_backend_profile,
     preflight_backend,
+    reasoning_tokenizer_from_profile,
     resolve_backend_invocation,
     seed_for_repetition,
     start_owned_backend,
@@ -66,6 +67,7 @@ def execute_controlled_pi_run(
         failed = _preserve_failure(output, run_definition.run_id, backend, backend_paths, report, run_seed)
         shutil.rmtree(control_root)
         return ControlledPiResult(None, None, failed)
+    reasoning_tokenizer = reasoning_tokenizer_from_profile(backend)
 
     if phase_reporter is not None:
         phase_reporter("running")
@@ -82,7 +84,9 @@ def execute_controlled_pi_run(
         result = execute_run(run_definition=run_definition, prompt_content=prompt_content, adapter=PiAdapter(harness), artifacts_root=output / "artifacts", worktrees_root=output / "worktrees", isolation_root=output / "runtime" / "harness", proxy_endpoint=harness.proxy_base_url, run_seed=run_seed, task_service=service)
         if phase_reporter is not None:
             phase_reporter("analyzing")
-        metrics = calculate_run_metrics(result.artifact_path)
+        metrics = calculate_run_metrics(
+            result.artifact_path, reasoning_tokenizer=reasoning_tokenizer,
+        )
         stored = store_metrics_artifact(source_artifact=result.artifact_path, output_root=output / "analysis", metrics=metrics)
         shutil.rmtree(control_root)
         return ControlledPiResult(result, stored, None)

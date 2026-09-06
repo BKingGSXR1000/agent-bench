@@ -14,6 +14,12 @@ executable:
   path: /home/bking/AI/llama.cpp/build/bin/llama-server
   size_bytes: 17920
   sha256: 92a71ff10ed10f9a24d5af934770f86e1ac6ef0dfccb7d5612f73a2670bb123b
+# External analysis dependency.  This binary and the GGUF stay outside Git;
+# their pinned identities make reasoning-token metrics reproducible.
+reasoning_tokenizer:
+  path: /home/bking/AI/llama.cpp/build/bin/llama-tokenize
+  size_bytes: 40808
+  sha256: 63fccdf4bd996260b84f705f8ac180526eb3969bd488ec212b7e2a96c969da7f
 llama_cpp_repository: /home/bking/AI/llama.cpp
 llama_cpp_commit: dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe
 version_output_contains:

@@ -1325,19 +1325,21 @@ def _calculate_reasoning_metrics(
                 ) if reasoning_token_cache is not None else reasoning_tokenizer.count(block.text)
                 for block in blocks
             ]
-        except ReasoningTokenizerError:
-            counts = None
+        except ReasoningTokenizerError as exc:
+            # A configured exact tokenizer is a hard analysis dependency.  A
+            # false unavailable value would make a newly sealed run look like
+            # legacy evidence, so fail before metrics-v1 is persisted.
+            raise MetricsCalculationError(
+                f"configured reasoning tokenizer could not count captured reasoning: {exc}"
+            ) from exc
         if counts is not None:
-            provenance = {"events": evidence, "artifacts": ("raw/events.jsonl",), "source_methods": (reasoning_tokenizer.tokenizer_identity, reasoning_tokenizer.model_sha256, reasoning_tokenizer.tokenizer_digest)}
+            provenance = {"events": evidence, "artifacts": ("raw/events.jsonl",), "source_methods": (reasoning_tokenizer.tokenizer_identity, "tokenizer_executable_sha256=" + reasoning_tokenizer.tokenizer_digest, "gguf_sha256=" + reasoning_tokenizer.model_sha256, "tokenizer_invocation=--model <GGUF> --stdin --show-count --no-bos")}
             total_tokens = _available(sum(counts), "tokens", "tokenizer_reconstructed", **provenance)
             max_tokens = _available(max(counts), "tokens", "tokenizer_reconstructed", **provenance)
             def tokens_before(boundary: int | None) -> ScalarMetric:
                 if boundary is None: return _unavailable("tokens", "event_not_observed", events=evidence)
                 return _available(sum(count for block, count in zip(blocks, counts, strict=True) if block.sequence < boundary), "tokens", "tokenizer_reconstructed", **provenance)
             before_tool_tokens, before_edit_tokens = tokens_before(tool_boundary), tokens_before(edit_boundary)
-        else:
-            total_tokens = _unavailable("tokens", "source_not_exposed", events=evidence)
-            max_tokens = before_tool_tokens = before_edit_tokens = _unavailable("tokens", "source_not_exposed", events=evidence)
     else:
         # Usage counters that say zero while captured blocks are non-empty
         # conflict with primary text evidence.  Do not publish that zero.

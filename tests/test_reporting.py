@@ -28,6 +28,7 @@ from agent_bench.reporting import (
     _comparative_validity,
     concise_chart_series_labels,
     build_unified_report,
+    _variant_observation_counts,
 )
 from agent_bench.executor import ExperimentState, RunProgress
 from agent_bench.failure import FailureEnvironmentRecord, preserve_failed_run
@@ -53,6 +54,56 @@ def test_type7_quantiles_and_n1_are_deterministic() -> None:
     assert quantile_type7([1, 2, 3], .25) == 1.5
     assert quantile_type7([9], .25) == quantile_type7([9], .75) == 9
     assert quantile_type7([], .5) is None
+
+
+def test_variant_common_strata_do_not_mislabel_another_variant_absence_as_unavailable() -> None:
+    metric = "timing.wall_time_seconds.value"
+    rows = []
+    for index in range(45):
+        shared = {
+            "subject_id": "taskboard", "semantic_task": "task", "prompt_sha256": "a" * 64,
+            "repetition": index + 1, "seed": 1001 + index,
+        }
+        for profile in ("A", "B", "C"):
+            rows.append({**shared, "profile": profile, "metrics": {metric: 1}})
+        if index < 43:
+            rows.append({**shared, "profile": "D", "metrics": {metric: 1}})
+
+    counts = _variant_observation_counts(rows, metric=metric, variants=("A", "B", "C", "D"))
+
+    for profile in ("A", "B", "C"):
+        assert counts[profile] == {
+            "common_matched": 43, "excluded_incomplete": 2,
+            "metric_unavailable": 0, "missing_provenance": 0,
+        }
+    assert counts["D"] == {
+        "common_matched": 43, "excluded_incomplete": 2,
+        "metric_unavailable": 0, "missing_provenance": 0,
+    }
+
+    present_d = next(row for row in rows if row["profile"] == "D")
+    present_d["metrics"][metric] = None  # type: ignore[index]
+    unavailable = _variant_observation_counts(rows, metric=metric, variants=("A", "B", "C", "D"))
+    for profile in ("A", "B", "C"):
+        assert unavailable[profile] == {
+            "common_matched": 42, "excluded_incomplete": 3,
+            "metric_unavailable": 0, "missing_provenance": 0,
+        }
+    assert unavailable["D"]["metric_unavailable"] == 1
+    assert unavailable["D"]["excluded_incomplete"] == 2
+    assert unavailable["D"]["common_matched"] == 42
+
+    pairwise = _variant_observation_counts(
+        rows, metric=metric, variants=("A", "B", "C", "D"), reference="A",
+    )
+    assert pairwise["B"] == {
+        "common_matched": 45, "excluded_incomplete": 0,
+        "metric_unavailable": 0, "missing_provenance": 0,
+    }
+    assert pairwise["D"] == {
+        "common_matched": 42, "excluded_incomplete": 2,
+        "metric_unavailable": 1, "missing_provenance": 0,
+    }
 
 
 def test_normalized_curve_uses_task_relative_time_and_does_not_cross_unavailable_gap() -> None:
@@ -180,7 +231,10 @@ def test_dashboard_html_supports_a_full_matrix_without_claiming_variability() ->
     }
     output = _html_report({"experiment_id": "synthetic-v1"}, presentation)
     assert "AGENT BENCH" in output
-    assert "Run Explorer" in output
+    assert output.index('id="variant-comparison"') < output.index('id="comparison"') < output.index('id="explorer"')
+    assert "Executed Runs" in output
+    assert '<details><summary id="executed-summary">Show individual runs</summary>' in output
+    assert "Show individual runs (${done.length})" in output
     assert "Pending / Planned" in output
     assert "individual only; no spread" in output
     assert "median + Q1–Q3" in output
@@ -283,7 +337,9 @@ def test_variant_comparison_is_metric_selectable_and_uses_only_matched_determini
     assert "Variant Comparison" in output and "not an overall efficiency score or quality ranking" in output
     assert "variantMetricLabels" in output
     assert "Wall time" in output and "Output tokens" in output
-    assert "Requests before first model tool" in output
+    assert "Prior responses before first tool-call turn" in output
+    assert "Output tokens in prior responses before first tool-call turn" in output
+    assert "Zero means the first tool or edit call appeared in the first complete model response" in output
     # The selector is populated from finite values in raw immutable report data;
     # no unavailable or inferred reasoning time/token metric is introduced.
     assert "function variantMetricKeys(rows)" in output
@@ -298,7 +354,8 @@ def test_variant_comparison_is_metric_selectable_and_uses_only_matched_determini
     assert "${titleCase(row.harness)} · ${profileLabel(row.profile)}" in output
     assert "row.prompt_sha256,row.repetition,row.seed" in output
     assert "function variantMatchable(row)" in output
-    assert "rows without task, exact prompt SHA-256, repetition, or seed provenance are explicitly excluded" in output
+    assert "missing matching provenance" in output
+    assert "excluded: incomplete" in output and "metric unavailable" in output
     assert "matched by subject, task, exact prompt SHA-256, repetition, and seed" in output
     assert "[variantSubject(row),row.semantic_task,row.prompt_sha256,row.repetition,row.seed]" in output
     assert "for(const variants of cases.values())" in output
@@ -306,7 +363,10 @@ def test_variant_comparison_is_metric_selectable_and_uses_only_matched_determini
     # explicit, and both sort directions remain numeric with N/A last.
     assert "median:type7(observed,.5)" in output
     assert "q1:observed.length>1?type7(observed,.25):null" in output
-    assert "n_unavailable:total-observed.length" in output
+    assert "n_common_matched:observed.length" in output
+    assert "n_excluded_incomplete:stat.excluded_incomplete" in output
+    assert "n_metric_unavailable:stat.metric_unavailable" in output
+    assert "n_missing_provenance:missingProvenance" in output
     assert "function orderVariantRows(rows,order)" in output
     assert "order==='lowest'?a-b:b-a" in output
     assert "if(am!==bm)return am?1:-1" in output
@@ -314,7 +374,7 @@ def test_variant_comparison_is_metric_selectable_and_uses_only_matched_determini
     # reference edge case. Rendering works from copied summaries, never sorting
     # the sealed d.matched_comparison.raw_runs source.
     assert "candidate-referenceValue" in output
-    assert "referenceValue===0?null" in output
+    assert "if(referenceValue!==0)stat.values.push(100*(candidate-referenceValue)/referenceValue)" in output
     assert "const copy=[...rows]" in output
     assert "Prompt = All aggregates matched observations within each exact prompt SHA and seed" in output
     assert "<script src=" not in output and "cdn" not in output.lower()

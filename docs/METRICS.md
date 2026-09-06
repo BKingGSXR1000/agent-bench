@@ -30,6 +30,16 @@ The following rules apply to every metric:
 - Counts include only events that the normalizer can derive reliably. If capture coverage is known to be incomplete for a category, that category's count is unavailable rather than a lower bound presented as complete.
 - A run can have partial metrics after failure if their source data remains valid.
 
+For newly captured runs, `reasoning_only_responses` is exact only when every
+correlated proxy final response exposes `reasoning_content`,
+`visible_answer_present`, and `tool_calls`.  Otherwise it remains unavailable;
+historical sealed reports are never backfilled from guesses.  New controlled
+runs with captured reasoning blocks use the configured pinned
+`llama-tokenize --model <GGUF> --stdin --show-count --no-bos` dependency during
+normal metrics-v1 analysis.  Its executable SHA256, llama.cpp commit, GGUF
+SHA256, and invocation identity are retained as tokenizer reconstruction
+provenance.
+
 ## 2. Timing boundaries and interval rules
 
 `task_start` is the monotonic boundary immediately before submitting the byte-exact prompt to the fresh harness session, after backend readiness and any configured warmup. `task_end` is the earliest authoritative terminal boundary for the task: clean harness completion, timeout trigger, unrecoverable crash/error, context overflow, or forced process termination when no earlier boundary exists.
@@ -163,10 +173,10 @@ Secondary attributes may state that a test used a shell or an edit also created 
 | `reasoning_only_responses` | Count of proxy-observed final model responses with nonempty `reasoning_content`, no visible answer content, and no model tool call | Correlated proxy `LLMResponseEvent` final response payloads | responses | Available only when every relevant final response explicitly exposes visible-answer presence and tool calls. Missing legacy fields produce `source_not_exposed`; no text is inferred from token counts. This is a response observation, not a harness turn metric. |
 | `length_finished_responses` | Count of final responses whose explicit finish reason is `length`, `max_tokens`, or `max_output_tokens` | Proxy `LLMResponseEvent` final response payloads | responses | Available only when a final response with a string finish reason is captured for every correlated inference response. Missing or non-string reasons are unavailable, never treated as `stop`. |
 | `length_finished_without_tool_call` | Subset of `length_finished_responses` that has no model tool call in the final response | Same as above | responses | Same availability rule. It says nothing about whether a harness subsequently executed a tool. |
-| `requests_before_first_model_tool_call` | Number of inference requests strictly before the first proxy-observed model tool call | Ordered correlated proxy exchanges | requests | Unavailable when no model tool call is observed or request ordering/tool-call exposure is incomplete. It is not `time_to_first_harness_tool_execution`. |
-| `output_tokens_before_first_model_tool_call` | Sum of exact API output tokens for the requests strictly before the first model tool call | Ordered proxy exchanges plus API usage | tokens | Unavailable if the first model tool call is absent or any included response lacks exact output usage. |
-| `requests_before_first_model_edit_call` | Number of inference requests strictly before the first model tool call whose deterministic name maps to edit/write (`patch`, `apply_patch`, `edit`, `edit_file`, `write`, or `write_file`) | Ordered proxy exchanges and model tool-call names | requests | Unavailable when no recognized model edit call is observed or a tool name cannot be parsed. A model edit call is not evidence that the harness executed or succeeded at the edit. |
-| `output_tokens_before_first_model_edit_call` | Sum of exact API output tokens for the requests strictly before the first recognized model edit call | Same as above plus API usage | tokens | Same availability rule as the preceding metric; no usage estimation is allowed. |
+| `requests_before_first_model_tool_call` | Number of complete prior model responses before the response containing the first proxy-observed model tool call | Ordered correlated proxy exchanges | requests | Zero means the tool call appeared in the first complete model response; it does not assert that response contained no reasoning/text before the call. Unavailable when no model tool call is observed or request ordering/tool-call exposure is incomplete. It is not `time_to_first_harness_tool_execution`. |
+| `output_tokens_before_first_model_tool_call` | Sum of exact API output tokens in complete prior responses before the response containing the first model tool call | Ordered proxy exchanges plus API usage | tokens | Zero means the tool call appeared in the first complete model response; it does not assert zero within-response reasoning/text before the call. Unavailable if the first model tool call is absent or any included response lacks exact output usage. |
+| `requests_before_first_model_edit_call` | Number of complete prior model responses before the response containing the first model tool call whose deterministic name maps to edit/write (`patch`, `apply_patch`, `edit`, `edit_file`, `write`, or `write_file`) | Ordered proxy exchanges and model tool-call names | requests | Zero means the edit call appeared in the first complete model response; it does not assert that response contained no reasoning/text before the call. Unavailable when no recognized model edit call is observed or a tool name cannot be parsed. A model edit call is not evidence that the harness executed or succeeded at the edit. |
+| `output_tokens_before_first_model_edit_call` | Sum of exact API output tokens in complete prior responses before the response containing the first recognized model edit call | Same as above plus API usage | tokens | Same availability rule as the preceding metric; no usage estimation is allowed. |
 
 ## 7. Derived efficiency metrics
 

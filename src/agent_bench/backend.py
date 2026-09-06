@@ -23,6 +23,7 @@ import yaml
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from agent_bench.models import Identifier, JsonMapping, PersistedModel, Sha256
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenizerError
 
 DEFAULT_BACKEND_PROFILE_PATH = (
     Path(__file__).resolve().parents[2] / "environment" / "backend-v1.yaml"
@@ -137,6 +138,9 @@ class BackendProfile(PersistedModel):
     model: PinnedFile
     chat_template: PinnedFile
     executable: PinnedFile
+    # This is deliberately an external deployment dependency.  The benchmark
+    # repository records its identity, but never contains the binary or GGUF.
+    reasoning_tokenizer: PinnedFile | None = None
     llama_cpp_repository: Path
     llama_cpp_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     version_output_contains: tuple[str, ...] = Field(min_length=1)
@@ -148,6 +152,29 @@ class BackendProfile(PersistedModel):
     readiness_endpoint: Literal["/health"] = "/health"
     readiness_timeout_seconds: float = Field(default=900.0, gt=0)
     shutdown_grace_seconds: float = Field(default=10.0, gt=0)
+
+
+def reasoning_tokenizer_from_profile(profile: BackendProfile) -> LlamaTokenizeCounter | None:
+    """Build the configured exact counter after preflight has pinned its files.
+
+    ``None`` remains valid for legacy/general profiles.  Functional profiles
+    opt in through ``reasoning_tokenizer`` and therefore never silently fall
+    back to character counts or token estimates.
+    """
+    configured = profile.reasoning_tokenizer
+    if configured is None:
+        return None
+    try:
+        return LlamaTokenizeCounter(
+            executable=configured.path,
+            model=profile.model.path,
+            model_sha256=profile.model.sha256,
+            llama_cpp_commit=profile.llama_cpp_commit,
+        )
+    except ReasoningTokenizerError as exc:
+        raise BackendLifecycleError(
+            f"configured reasoning tokenizer is unavailable: {exc}"
+        ) from exc
 
 
 class BackendRunPaths(PersistedModel):
@@ -449,6 +476,11 @@ def preflight_backend(
         checks, "llama-server", profile.executable, "backend_identity_mismatch", hasher,
         require_executable=True,
     )
+    if profile.reasoning_tokenizer is not None:
+        _check_pinned_file(
+            checks, "llama-tokenize", profile.reasoning_tokenizer,
+            "backend_identity_mismatch", hasher, require_executable=True,
+        )
     for index, library in enumerate(profile.local_libraries, start=1):
         _check_pinned_file(
             checks,
