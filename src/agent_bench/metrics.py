@@ -35,7 +35,11 @@ from agent_bench.metric_models import (
 )
 from agent_bench.models import canonical_sha256
 from agent_bench.reasoning_blocks import extract_reasoning_blocks
-from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenizerError
+from agent_bench.reasoning_tokenizer import (
+    LlamaTokenizeCounter,
+    ReasoningTokenCache,
+    ReasoningTokenizerError,
+)
 from agent_bench.preservation import (
     GIT_UNTRACKED_NUMSTAT_PATH,
     GIT_TRACKED_NUMSTAT_PATH,
@@ -112,6 +116,7 @@ class _GitSummary:
 
 def calculate_run_metrics(
     artifact_path: Path, *, reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
 ) -> RunMetrics:
     """Verify and deterministically calculate metrics for one sealed run."""
     root = artifact_path.expanduser().resolve()
@@ -132,6 +137,12 @@ def calculate_run_metrics(
     if any(event.run_id != run_manifest.run_id for event in raw_events):
         raise MetricsCalculationError("raw stream contains a different run ID")
     _validate_event_provenance(raw_events, events)
+    reasoning_evidence_identity = {
+        "artifact_manifest_sha256": _sha256_file(root / MANIFEST_PATH),
+        "normalized_events_sha256": _sha256_file(root / NORMALIZED_EVENTS_PATH),
+        "raw_events_sha256": _sha256_file(root / RAW_EVENTS_PATH),
+        "run_id": run_manifest.run_id,
+    }
 
     diagnostics: list[str] = []
     capabilities = run_manifest.capture_capabilities
@@ -181,7 +192,8 @@ def calculate_run_metrics(
     )
     reasoning = _calculate_reasoning_metrics(
         events, tokens.reasoning_tokens_total, tokens.reasoning_tokens_before_first_edit,
-        reasoning_tokenizer=reasoning_tokenizer, raw_events=raw_events,
+        reasoning_tokenizer=reasoning_tokenizer, reasoning_token_cache=reasoning_token_cache,
+        reasoning_evidence_identity=reasoning_evidence_identity, raw_events=raw_events,
     )
     # Explicit captured reasoning text takes precedence over a conflicting
     # zero-valued usage counter.  A zero counter is not evidence of zero
@@ -200,10 +212,10 @@ def calculate_run_metrics(
     )
 
     input_identity = MetricsInputIdentity(
-        artifact_manifest_sha256=_sha256_file(root / MANIFEST_PATH),
+        artifact_manifest_sha256=reasoning_evidence_identity["artifact_manifest_sha256"],
         run_manifest_sha256=_sha256_file(root / RUN_MANIFEST_PATH),
-        raw_events_sha256=_sha256_file(root / RAW_EVENTS_PATH),
-        normalized_events_sha256=_sha256_file(root / NORMALIZED_EVENTS_PATH),
+        raw_events_sha256=reasoning_evidence_identity["raw_events_sha256"],
+        normalized_events_sha256=reasoning_evidence_identity["normalized_events_sha256"],
         source_snapshot_sha256=artifact_manifest.source_snapshot_sha256,
         git_diff_sha256=artifact_manifest.git_diff_sha256,
         git_tracked_numstat_sha256=_sha256_file(root / GIT_TRACKED_NUMSTAT_PATH),
@@ -1259,6 +1271,8 @@ def _calculate_reasoning_metrics(
     usage_before_edit: ScalarMetric,
     *,
     reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
+    reasoning_evidence_identity: dict[str, str] | None = None,
     raw_events: tuple[RawEvent, ...] = (),
 ) -> ReasoningMetrics:
     """Calculate captured-thinking metrics without character/token conflation.
@@ -1303,7 +1317,14 @@ def _calculate_reasoning_metrics(
 
     if reasoning_tokenizer is not None:
         try:
-            counts = [reasoning_tokenizer.count(block.text) for block in blocks]
+            counts = [
+                reasoning_token_cache.count(
+                    block.text,
+                    source_evidence_identity=reasoning_evidence_identity or {},
+                    tokenizer=reasoning_tokenizer,
+                ) if reasoning_token_cache is not None else reasoning_tokenizer.count(block.text)
+                for block in blocks
+            ]
         except ReasoningTokenizerError:
             counts = None
         if counts is not None:

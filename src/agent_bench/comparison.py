@@ -13,6 +13,8 @@ import json
 import shutil
 import tempfile
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ from agent_bench.metrics import calculate_run_metrics
 from agent_bench.metrics_storage import verify_metrics_artifact
 from agent_bench.models import canonical_sha256
 from agent_bench.preservation import verify_artifact
-from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter
+from agent_bench.reasoning_tokenizer import LlamaTokenizeCounter, ReasoningTokenCache
 from agent_bench.reporting import ReportError, quantile_type7, verify_report
 from agent_bench.result_store import verify_published_result
 from agent_bench.runner import RunManifest
@@ -33,6 +35,21 @@ from agent_bench.runner import RunManifest
 
 class ComparisonError(RuntimeError):
     """Evidence cannot safely be included in a matched comparison."""
+
+
+REASONING_TOKEN_CACHE_DIRECTORY = ".reasoning-token-cache-v1"
+RunProgressCallback = Callable[[int, int, str], None]
+
+
+@dataclass
+class _RunProgress:
+    total: int
+    callback: RunProgressCallback
+    completed: int = 0
+
+    def advance(self, run_id: str) -> None:
+        self.completed += 1
+        self.callback(self.completed, self.total, run_id)
 
 
 METRICS = (
@@ -83,6 +100,8 @@ def build_comparison(
     roots: list[Path], *, output: Path, definitions: list[Path] | None = None,
     reference_profile: str | None = None, include_all_pairs: bool = False,
     reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
+    progress: RunProgressCallback | None = None,
 ) -> Path:
     """Build a sealed derived comparison without modifying source roots.
 
@@ -102,8 +121,15 @@ def build_comparison(
     target = output.expanduser().resolve()
     if target.exists():
         raise ComparisonError(f"comparison destination already exists: {target}")
+    cache = _resolve_reasoning_token_cache(
+        target, sources, reasoning_tokenizer, reasoning_token_cache,
+    )
+    tracker = _RunProgress(_completed_run_total(sources), progress) if progress is not None else None
     inputs = [
-        _read_root(root, definitions[index] if definitions else None, reasoning_tokenizer)
+        _read_root(
+            root, definitions[index] if definitions else None, reasoning_tokenizer,
+            cache, tracker.advance if tracker is not None else None,
+        )
         for index, root in enumerate(sources)
     ]
     compatibility = _compatibility(inputs)
@@ -166,6 +192,8 @@ def build_comparison(
 def _read_root(
     root: Path, explicit_definition: Path | None,
     reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
+    on_run: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     try:
         state = ExperimentState.model_validate_json((root / "experiment-state.json").read_bytes())
@@ -179,10 +207,35 @@ def _read_root(
                 f"no immutable experiment definition or verified historical report is available for {state.experiment_id}; "
                 "supply --experiment-definition once per root"
             )
-        if reasoning_tokenizer is None:
+        if reasoning_tokenizer is None and reasoning_token_cache is None and on_run is None:
             return _read_legacy_root(root, state, legacy)
-        return _read_legacy_root(root, state, legacy, reasoning_tokenizer)
-    return _read_definition_root(root, state, definition, reasoning_tokenizer)
+        return _read_legacy_root(root, state, legacy, reasoning_tokenizer, reasoning_token_cache, on_run)
+    return _read_definition_root(root, state, definition, reasoning_tokenizer, reasoning_token_cache, on_run)
+
+
+def _completed_run_total(roots: list[Path]) -> int:
+    total = 0
+    for root in roots:
+        try:
+            state = ExperimentState.model_validate_json((root / "experiment-state.json").read_bytes())
+        except Exception as exc:
+            raise ComparisonError(f"invalid experiment state at {root}: {exc}") from exc
+        total += sum(progress.state == "completed" for progress in state.runs)
+    return total
+
+
+def _resolve_reasoning_token_cache(
+    target: Path,
+    sources: list[Path],
+    tokenizer: LlamaTokenizeCounter | None,
+    cache: ReasoningTokenCache | None,
+) -> ReasoningTokenCache | None:
+    if tokenizer is None:
+        return None
+    resolved = (cache.root if cache is not None else target.parent / REASONING_TOKEN_CACHE_DIRECTORY).expanduser().resolve()
+    if any(resolved.is_relative_to(source) for source in sources):
+        raise ComparisonError("reasoning token cache must be outside immutable experiment source roots")
+    return ReasoningTokenCache(resolved)
 
 
 def _resolve_definition(state: ExperimentState, explicit: Path | None) -> Any | None:
@@ -215,6 +268,8 @@ def _resolve_definition(state: ExperimentState, explicit: Path | None) -> Any | 
 def _read_definition_root(
     root: Path, state: ExperimentState, definition: Any,
     reasoning_tokenizer: LlamaTokenizeCounter | None,
+    reasoning_token_cache: ReasoningTokenCache | None,
+    on_run: Callable[[str], None] | None,
 ) -> dict[str, Any]:
     planned = {item.run_id: item for item in expand_experiment(definition)}
     profiles = {item.profile_id: item for item in definition.harness_profiles}
@@ -222,6 +277,8 @@ def _read_definition_root(
     completed = [progress for progress in state.runs if progress.state == "completed"]
     rows: list[dict[str, Any]] = []
     for progress in completed:
+        if on_run is not None:
+            on_run(progress.run_id)
         run = planned.get(progress.run_id)
         if run is None:
             raise ComparisonError(f"completed run is absent from immutable definition: {progress.run_id}")
@@ -236,6 +293,7 @@ def _read_definition_root(
         _verify_analysis_links(artifact, stored, context, run.run_id)
         values, provenance = _metric_values(
             stored.metrics, artifact, reasoning_tokenizer=reasoning_tokenizer,
+            reasoning_token_cache=reasoning_token_cache,
         )
         functional = _functional_values(root, artifact, run)
         values.update(functional["metrics"]); provenance.update(functional["provenance"])
@@ -296,6 +354,8 @@ def _legacy_report_presentation(root: Path, state: ExperimentState) -> dict[str,
 def _read_legacy_root(
     root: Path, state: ExperimentState, presentation: dict[str, Any],
     reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
+    on_run: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct comparison facts from a verified historic derived report.
 
@@ -312,6 +372,8 @@ def _read_legacy_root(
     completed = [progress for progress in state.runs if progress.state == "completed"]
     rows: list[dict[str, Any]] = []
     for progress in completed:
+        if on_run is not None:
+            on_run(progress.run_id)
         planned = runs.get(progress.run_id)
         if planned is None:
             raise ComparisonError(f"verified historical report lacks completed run metadata: {progress.run_id}")
@@ -338,6 +400,7 @@ def _read_legacy_root(
         _verify_analysis_links(artifact, stored, context, progress.run_id)
         values, provenance = _metric_values(
             stored.metrics, artifact, reasoning_tokenizer=reasoning_tokenizer,
+            reasoning_token_cache=reasoning_token_cache,
         )
         settings = profile.get("settings") if isinstance(profile.get("settings"), dict) else {}
         rows.append({
@@ -435,17 +498,26 @@ def _functional_values(root: Path, artifact: Path, run: Any) -> dict[str, Any]:
 
 def _metric_values(
     metrics: Any, artifact: Path, *, reasoning_tokenizer: LlamaTokenizeCounter | None = None,
+    reasoning_token_cache: ReasoningTokenCache | None = None,
 ) -> tuple[dict[str, float | int | None], dict[str, str]]:
     dumped = metrics.model_dump(mode="json")
     recalculated: dict[str, Any] | None = None
     values: dict[str, float | int | None] = {}
     provenance: dict[str, str] = {}
+    needs_reasoning_reconstruction = any(
+        _path(dumped, path) is None
+        and (path.startswith("reasoning.") or path == "derived.reasoning_to_output_ratio.value")
+        for path in _RAW_EVIDENCE_FALLBACK_METRICS
+    )
     for path in METRICS:
         value = _path(dumped, path)
         if value is None and path in _RAW_EVIDENCE_FALLBACK_METRICS:
-            recalculated = recalculated or calculate_run_metrics(
-                artifact, reasoning_tokenizer=reasoning_tokenizer,
-            ).model_dump(mode="json")
+            kwargs: dict[str, Any] = {}
+            if needs_reasoning_reconstruction:
+                kwargs["reasoning_tokenizer"] = reasoning_tokenizer
+            if needs_reasoning_reconstruction and reasoning_token_cache is not None:
+                kwargs["reasoning_token_cache"] = reasoning_token_cache
+            recalculated = recalculated or calculate_run_metrics(artifact, **kwargs).model_dump(mode="json")
             value = _path(recalculated, path)
             provenance[path] = "recalculated_from_raw_evidence" if value is not None else "unavailable"
         else:

@@ -2,6 +2,7 @@ import json
 import copy
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from agent_bench import __version__
@@ -11,6 +12,16 @@ from agent_bench.matrix import expand_experiment
 from conftest import ExperimentFixture, GitRepositoryFixture
 
 runner = CliRunner()
+
+
+def test_report_reconstruction_progress_is_stderr_only(capsys: pytest.CaptureFixture[str]) -> None:
+    from agent_bench.cli import _report_progress
+
+    _report_progress(83, 268, "fixture-run")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "Processing runs: 83 / 268\nCurrent: fixture-run\n"
 
 
 def test_cli_help() -> None:
