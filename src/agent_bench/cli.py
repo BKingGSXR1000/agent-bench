@@ -511,10 +511,10 @@ def metrics_calculate(
 ) -> None:
     """Calculate and seal a separate immutable metrics artifact."""
     try:
-        tokenizer_options = (reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit)
-        if any(value is not None for value in tokenizer_options) and not all(value is not None for value in tokenizer_options):
-            raise MetricsCalculationError("all --reasoning-tokenizer-* options are required together")
-        tokenizer = LlamaTokenizeCounter(reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit) if all(value is not None for value in tokenizer_options) else None
+        tokenizer = _reasoning_tokenizer_from_options(
+            reasoning_tokenizer_executable, reasoning_tokenizer_model,
+            reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit,
+        )
         metrics = calculate_run_metrics(source_artifact, reasoning_tokenizer=tokenizer)
         stored = store_metrics_artifact(
             source_artifact=source_artifact,
@@ -530,6 +530,16 @@ def metrics_calculate(
         f"metrics_sha256={stored.manifest.metrics_sha256}\n"
         f"metrics_artifact={stored.root}"
     )
+
+
+def _reasoning_tokenizer_from_options(
+    executable: Path | None, model: Path | None, model_sha256: str | None,
+    commit: str | None,
+) -> LlamaTokenizeCounter | None:
+    options = (executable, model, model_sha256, commit)
+    if any(value is not None for value in options) and not all(value is not None for value in options):
+        raise MetricsCalculationError("all --reasoning-tokenizer-* options are required together")
+    return LlamaTokenizeCounter(executable, model, model_sha256, commit) if all(value is not None for value in options) else None
 
 
 @metrics_app.command("show")
@@ -665,16 +675,22 @@ def report_compare(
     experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="Read-only immutable definition mapping: one YAML per root, in the same order."),
     reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient pairs as candidate minus this reference profile."),
     all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
+    reasoning_tokenizer_executable: Path | None = typer.Option(None, "--reasoning-tokenizer-executable", help="Pinned llama-tokenize executable; enables exact historical reasoning block tokenization."),
+    reasoning_tokenizer_model: Path | None = typer.Option(None, "--reasoning-tokenizer-model", help="Pinned GGUF model for exact historical reasoning block tokenization."),
+    reasoning_tokenizer_model_sha256: str | None = typer.Option(None, "--reasoning-tokenizer-model-sha256", help="Sealed SHA-256 identity of the GGUF model."),
+    reasoning_tokenizer_commit: str | None = typer.Option(None, "--reasoning-tokenizer-commit", help="Pinned llama.cpp commit for llama-tokenize."),
 ) -> None:
     """Build read-only matched profile comparisons across experiment roots."""
     try:
+        tokenizer = _reasoning_tokenizer_from_options(reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit)
         root = build_comparison(
             experiment_roots, output=output,
             definitions=experiment_definition or None,
             reference_profile=reference_profile,
             include_all_pairs=all_pairs,
+            reasoning_tokenizer=tokenizer,
         )
-    except ComparisonError as exc:
+    except (ComparisonError, MetricsCalculationError, ReasoningTokenizerError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"comparison={root}\nstatus=sealed")
@@ -687,15 +703,21 @@ def report_combine(
     experiment_definition: list[Path] = typer.Option([], "--experiment-definition", help="Read-only immutable definition mapping: one YAML per root, in the same order."),
     reference_profile: str | None = typer.Option(None, "--reference-profile", help="Orient matched pairs as candidate minus this reference profile."),
     all_pairs: bool = typer.Option(False, "--all-pairs", help="Also include non-reference profile pairs."),
+    reasoning_tokenizer_executable: Path | None = typer.Option(None, "--reasoning-tokenizer-executable", help="Pinned llama-tokenize executable; enables exact historical reasoning block tokenization."),
+    reasoning_tokenizer_model: Path | None = typer.Option(None, "--reasoning-tokenizer-model", help="Pinned GGUF model for exact historical reasoning block tokenization."),
+    reasoning_tokenizer_model_sha256: str | None = typer.Option(None, "--reasoning-tokenizer-model-sha256", help="Sealed SHA-256 identity of the GGUF model."),
+    reasoning_tokenizer_commit: str | None = typer.Option(None, "--reasoning-tokenizer-commit", help="Pinned llama.cpp commit for llama-tokenize."),
 ) -> None:
     """Build one rich offline report from multiple compatible experiment roots."""
     try:
+        tokenizer = _reasoning_tokenizer_from_options(reasoning_tokenizer_executable, reasoning_tokenizer_model, reasoning_tokenizer_model_sha256, reasoning_tokenizer_commit)
         report = build_unified_report(
             experiment_roots, output=output,
             experiment_definitions=experiment_definition or None,
             reference_profile=reference_profile, include_all_pairs=all_pairs,
+            reasoning_tokenizer=tokenizer,
         )
-    except (ReportError, ComparisonError) as exc:
+    except (ReportError, ComparisonError, MetricsCalculationError, ReasoningTokenizerError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"report={report.root}\nstatus=sealed\nincluded_runs={len(report.manifest['included_run_ids'])}")

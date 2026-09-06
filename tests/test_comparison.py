@@ -72,7 +72,7 @@ def test_historical_reasoning_metrics_are_reconstructed_read_only(
     monkeypatch.setattr(
         comparison,
         "calculate_run_metrics",
-        lambda path: calls.append(path) or SimpleNamespace(model_dump=lambda **_kwargs: _metric_dump(17)),
+        lambda path, **_kwargs: calls.append(path) or SimpleNamespace(model_dump=lambda **_kwargs: _metric_dump(17)),
     )
 
     values, provenance = _metric_values(SimpleNamespace(model_dump=lambda **_kwargs: historical), artifact)
@@ -123,7 +123,7 @@ def test_unavailable_historical_reasoning_evidence_is_not_zero(
     monkeypatch.setattr(
         comparison,
         "calculate_run_metrics",
-        lambda _artifact: SimpleNamespace(model_dump=lambda **_kwargs: recalculated),
+        lambda _artifact, **_kwargs: SimpleNamespace(model_dump=lambda **_kwargs: recalculated),
     )
 
     values, provenance = _metric_values(SimpleNamespace(model_dump=lambda **_kwargs: historical), tmp_path)
@@ -133,6 +133,29 @@ def test_unavailable_historical_reasoning_evidence_is_not_zero(
     assert values["derived.reasoning_to_output_ratio.value"] is None
     assert provenance["reasoning.reasoning_tokens_before_first_tool.value"] == "unavailable"
     assert provenance["derived.reasoning_to_output_ratio.value"] == "unavailable"
+
+
+def test_historical_reasoning_recalculation_passes_the_pinned_tokenizer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from agent_bench import comparison
+
+    historical = _metric_dump(5)
+    historical.pop("reasoning")
+    tokenizer = object()
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        comparison,
+        "calculate_run_metrics",
+        lambda _artifact, **kwargs: observed.update(kwargs) or SimpleNamespace(model_dump=lambda **_kwargs: _metric_dump(17)),
+    )
+
+    _metric_values(
+        SimpleNamespace(model_dump=lambda **_kwargs: historical), tmp_path,
+        reasoning_tokenizer=tokenizer,  # type: ignore[arg-type]
+    )
+
+    assert observed == {"reasoning_tokenizer": tokenizer}
 
 
 def test_reference_pairs_have_explicit_candidate_minus_reference_signs_and_na() -> None:
