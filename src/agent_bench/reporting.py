@@ -36,6 +36,7 @@ from agent_bench.failure import verify_failed_run
 from agent_bench.events import load_normalized_events, load_raw_events
 from agent_bench.executor import ExperimentState
 from agent_bench.functional_storage import verify_functional_validation_artifact
+from agent_bench.adjudication import AdjudicationError, active_adjudication
 from agent_bench.matrix import expand_experiment
 from agent_bench.metrics_storage import verify_metrics_artifact
 from agent_bench.models import RunDefinition, canonical_sha256
@@ -151,6 +152,10 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("files_changed", pa.int64()), ("lines_added", pa.int64()),
         ("lines_deleted", pa.int64()),
         ("functional_validation_status", pa.string()),
+        ("automated_functional_v1_status", pa.string()),
+        ("automated_functional_v2_status", pa.string()),
+        ("manual_functional_status", pa.string()),
+        ("functional_status_provenance", pa.string()),
         ("functional_score_numerator", pa.int64()),
         ("functional_score_denominator", pa.int64()),
         ("functional_score_percent", pa.float64()),
@@ -979,22 +984,46 @@ def _ingest_completed(source: Path, experiment_id: str, run_id: str, base: dict[
 
 
 def _functional_report_fields(source: Path, artifact_root: Path, run_id: str, definition: RunDefinition | None) -> dict[str, Any]:
-    """Read only the verified M13 artifact; legacy rows are not functional FAIL."""
+    """Resolve manual > newest compatible automated > original v1 evidence."""
     if definition is None or definition.functional_scenario is None:
         return _functional_empty("not_applicable")
-    stored = verify_functional_validation_artifact(source / "analysis" / run_id / "functional-validation-v1")
     artifact = verify_artifact(artifact_root)
     artifact_sha = _sha(artifact_root / "manifest.json")
-    record = stored.result
     run_manifest_sha = _sha(artifact_root / "run" / "manifest.json")
-    if (
-        record.run_id != run_id
-        or record.source_artifact_manifest_sha256 != artifact_sha
-        or record.source_snapshot_sha256 != artifact.source_snapshot_sha256
-        or record.source_run_manifest_sha256 != run_manifest_sha
-    ):
-        raise ReportError("functional validation artifact does not link to the sealed run evidence")
-    return _functional_fields_from_record(record)
+    def verified(name: str) -> Any | None:
+        path = source / "analysis" / run_id / name
+        if not path.is_dir():
+            return None
+        stored = verify_functional_validation_artifact(path)
+        record = stored.result
+        if (record.run_id != run_id or record.source_artifact_manifest_sha256 != artifact_sha
+                or record.source_snapshot_sha256 != artifact.source_snapshot_sha256
+                or record.source_run_manifest_sha256 != run_manifest_sha):
+            raise ReportError("functional validation artifact does not link to the sealed run evidence")
+        return record
+    v1 = verified("functional-validation-v1")
+    v2 = verified("functional-validation-v2")
+    if v1 is None:
+        raise ReportError("functional validation v1 artifact is missing")
+    fields = _functional_fields_from_record(v2 or v1)
+    fields.update({
+        "automated_functional_v1_status": v1.validation_status,
+        "automated_functional_v2_status": v2.validation_status if v2 else None,
+        "manual_functional_status": None,
+        "functional_status_provenance": "automated functional validation v2" if v2 else "automated functional validation v1",
+    })
+    try:
+        manual = active_adjudication(source, run_id)
+    except AdjudicationError as exc:
+        raise ReportError(str(exc)) from exc
+    if manual is not None:
+        if manual.source_artifact_manifest_sha256 != artifact_sha or manual.source_snapshot_sha256 != artifact.source_snapshot_sha256:
+            raise ReportError("manual adjudication does not link to the sealed run evidence")
+        fields.update({
+            "functional_validation_status": "pass", "hard_gate_pass": True,
+            "manual_functional_status": "pass", "functional_status_provenance": "manual human verification",
+        })
+    return fields
 
 
 def _functional_fields_from_record(record: Any) -> dict[str, Any]:
@@ -1023,6 +1052,10 @@ def _functional_empty(status: str) -> dict[str, Any]:
         "baseline_regression_count": None, "baseline_regressions": None,
         "failed_functional_test_count": None,
         "failed_functional_test_ids": None,
+        "automated_functional_v1_status": None,
+        "automated_functional_v2_status": None,
+        "manual_functional_status": None,
+        "functional_status_provenance": None,
     }
 
 
@@ -1606,6 +1639,37 @@ def _html_report(summary: dict[str, Any], presentation: dict[str, Any]) -> str:
       status.textContent=`${baseline?'Baseline':'Runnable result'} unavailable: ${error.message||'request failed'}`;
     }finally{button.disabled=false;}
   });
+})();
+</script><script>
+(() => {
+  const reportData=JSON.parse(document.getElementById('agent-bench-data').textContent);
+  function install(){
+    document.querySelectorAll('[data-runnable-result]').forEach(result => {
+      const host=result.parentElement;
+      if(host.querySelector('[data-manual-ok]')) return;
+      const runId=result.dataset.runnableResult;
+      const button=document.createElement('button'); button.type='button'; button.className='button'; button.dataset.manualOk=runId;
+      const note=document.createElement('span'); note.className='muted'; note.dataset.manualStatus='';
+      const row=(reportData.runs||[]).find(item=>item.run_id===runId);
+      if(row?.manual_functional_status==='pass'){ button.textContent='Undo manual OK'; button.dataset.undo='yes'; note.textContent='PASS — manually verified (manual human verification).'; }
+      if(location.protocol==='file:'){ button.disabled=true; button.title='Manual status changes require Agent Bench report serve.'; note.textContent='Manual status changes require Agent Bench report serve.'; }
+      else if(!button.textContent) button.textContent='Mark result OK';
+      host.insertBefore(button, host.querySelector('[data-launch-status]')); host.insertBefore(note, host.querySelector('[data-launch-status]'));
+    });
+  }
+  async function change(button, undo){
+    const status=button.parentElement.querySelector('[data-manual-status]'); button.disabled=true;
+    try{
+      const response=await fetch(undo?'/api/adjudicate/undo':'/api/adjudicate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:button.dataset.manualOk,decision:'pass'})});
+      const payload=await response.json(); if(!response.ok) throw new Error(payload.error||'manual status update failed');
+      if(undo){ button.textContent='Mark result OK'; status.textContent='Manual OK undone. Aggregate comparisons will reflect this correction on the next report build.'; }
+      else { button.textContent='Undo manual OK'; status.textContent='PASS — manually verified (manual human verification). Aggregate comparisons will reflect this correction on the next report build.'; }
+      button.dataset.undo=undo?'':'yes';
+    }catch(error){ status.textContent=`Manual status unavailable: ${error.message||'request failed'}`; }
+    finally{ button.disabled=false; }
+  }
+  document.addEventListener('click', event=>{const button=event.target.closest('[data-manual-ok]');if(button&&!button.disabled)change(button,button.dataset.undo==='yes');});
+  new MutationObserver(install).observe(document.getElementById('run-detail'),{childList:true,subtree:true}); install();
 })();
 </script></body></html>\n"""
     return document.replace("__TITLE__", title).replace("__DATA__", data)

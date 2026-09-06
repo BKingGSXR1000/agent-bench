@@ -31,7 +31,7 @@ class FunctionalValidationArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0", "2.0.0"] = "1.0.0"
     functional_validation_id: str = Field(min_length=1)
     run_id: Identifier
     experiment_id: Identifier
@@ -42,7 +42,7 @@ class FunctionalValidationArtifact(BaseModel):
     prompt_sha256: Sha256
     scenario: FunctionalScenarioAssociation
     frozen_baseline: PortableBaselineIdentity
-    validation_status: Literal["pass", "fail", "error", "unavailable"]
+    validation_status: Literal["pass", "fail", "error", "unavailable", "needs_review"]
     acceptance_score_numerator: int | None
     acceptance_score_denominator: int | None
     functional_result: FunctionalValidationResult
@@ -75,7 +75,7 @@ class FunctionalValidationArtifact(BaseModel):
 class FunctionalValidationManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0", "2.0.0"] = "1.0.0"
     functional_validation_artifact_id: str = Field(min_length=1)
     run_id: Identifier
     source_artifact_manifest_sha256: Sha256
@@ -110,7 +110,7 @@ class StoredFunctionalValidation:
 
 def validate_and_store_functional_artifact(
     *, source_artifact: Path, output_root: Path, run_id: str, experiment_id: str,
-    association: FunctionalScenarioAssociation,
+    association: FunctionalScenarioAssociation, validator_version_label: str = "v1",
 ) -> StoredFunctionalValidation:
     """Restore a verified snapshot, validate it, then seal a new analysis artifact."""
     source = source_artifact.expanduser().resolve()
@@ -123,7 +123,7 @@ def validate_and_store_functional_artifact(
     if _sha(association.scenario_definition) != association.scenario_definition_sha256 or _sha(scenario.validator) != association.validator_sha256:
         raise FunctionalValidationStorageError("functional scenario or validator digest mismatch")
     output = output_root.expanduser().resolve()
-    final = output / run_id / "functional-validation-v1"
+    final = output / run_id / f"functional-validation-{validator_version_label}"
     if final.exists():
         raise FunctionalValidationStorageError(f"functional validation artifact already exists: {final}")
     final.parent.mkdir(parents=True, exist_ok=True)
@@ -139,8 +139,8 @@ def validate_and_store_functional_artifact(
         except Exception as exc:
             raise FunctionalValidationStorageError(f"could not restore or run functional validator: {exc}") from exc
     status = _status(raw_result)
-    numerator = raw_result.score_numerator if status in {"pass", "fail"} else None
-    denominator = raw_result.score_denominator if status in {"pass", "fail"} else None
+    numerator = raw_result.score_numerator if status in {"pass", "fail", "needs_review"} else None
+    denominator = raw_result.score_denominator if status in {"pass", "fail", "needs_review"} else None
     try:
         run_manifest = json.loads((source / "run/manifest.json").read_text(encoding="utf-8"))
         prompt_id = run_manifest["prompt_id"]
@@ -150,7 +150,8 @@ def validate_and_store_functional_artifact(
     if run_manifest.get("run_id") != run_id or run_manifest.get("experiment_id") != experiment_id:
         raise FunctionalValidationStorageError("sealed source run manifest does not match functional validation identity")
     result = FunctionalValidationArtifact.create(
-        functional_validation_id=f"{run_id}-functional-validation-v1", run_id=run_id,
+        schema_version="2.0.0" if validator_version_label == "v2" else "1.0.0",
+        functional_validation_id=f"{run_id}-functional-validation-{validator_version_label}", run_id=run_id,
         experiment_id=experiment_id, source_artifact_manifest_sha256=_sha(source / "manifest.json"),
         source_snapshot_sha256=source_manifest.source_snapshot_sha256,
         source_run_manifest_sha256=_sha(source / "run/manifest.json"), scenario=association,
@@ -159,25 +160,26 @@ def validate_and_store_functional_artifact(
         validation_status=status, acceptance_score_numerator=numerator,
         acceptance_score_denominator=denominator, functional_result=raw_result,
     )
-    return store_functional_validation_artifact(source_artifact=source, output_root=output, result=result)
+    return store_functional_validation_artifact(source_artifact=source, output_root=output, result=result, validator_version_label=validator_version_label)
 
 
-def store_functional_validation_artifact(*, source_artifact: Path, output_root: Path, result: FunctionalValidationArtifact) -> StoredFunctionalValidation:
+def store_functional_validation_artifact(*, source_artifact: Path, output_root: Path, result: FunctionalValidationArtifact, validator_version_label: str = "v1") -> StoredFunctionalValidation:
     source = source_artifact.expanduser().resolve(); source_manifest = verify_artifact(source)
     if source_manifest.run_id != result.run_id:
         raise FunctionalValidationStorageError("functional result run ID does not match source artifact")
     if result.source_artifact_manifest_sha256 != _sha(source / "manifest.json") or result.source_snapshot_sha256 != source_manifest.source_snapshot_sha256:
         raise FunctionalValidationStorageError("functional result source identity does not match sealed artifact")
-    final = output_root.expanduser().resolve() / result.run_id / "functional-validation-v1"
+    final = output_root.expanduser().resolve() / result.run_id / f"functional-validation-{validator_version_label}"
     if final.exists():
         raise FunctionalValidationStorageError(f"functional validation artifact already exists: {final}")
     final.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".functional-validation-v1.incomplete-", dir=final.parent))
+    staging = Path(tempfile.mkdtemp(prefix=f".functional-validation-{validator_version_label}.incomplete-", dir=final.parent))
     try:
         result_bytes = _json_bytes(result)
         (staging / RESULT_PATH).write_bytes(result_bytes)
         manifest = FunctionalValidationManifest.create(
-            functional_validation_artifact_id=f"{result.run_id}-functional-validation-artifact-v1", run_id=result.run_id,
+            schema_version=result.schema_version,
+            functional_validation_artifact_id=f"{result.run_id}-functional-validation-artifact-{validator_version_label}", run_id=result.run_id,
             source_artifact_manifest_sha256=result.source_artifact_manifest_sha256,
             source_snapshot_sha256=result.source_snapshot_sha256,
             functional_validation_id=result.functional_validation_id,
@@ -219,11 +221,13 @@ def _verify_root(root: Path) -> StoredFunctionalValidation:
     return StoredFunctionalValidation(root, manifest, result)
 
 
-def _status(result: FunctionalValidationResult) -> Literal["pass", "fail", "error", "unavailable"]:
+def _status(result: FunctionalValidationResult) -> Literal["pass", "fail", "error", "unavailable", "needs_review"]:
     if result.error_tests:
         return "error"
     if result.unavailable_tests:
         return "unavailable"
+    if result.manual_review_required_tests:
+        return "needs_review"
     return "pass" if result.hard_gate_pass else "fail"
 
 

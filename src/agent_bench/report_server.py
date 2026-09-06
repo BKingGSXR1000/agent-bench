@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from agent_bench.config import ExperimentConfigError, load_experiment
+from agent_bench.adjudication import AdjudicationError, append_adjudication
 from agent_bench.executor import ExperimentState
 from agent_bench.matrix import expand_experiment
 from agent_bench.models import ExperimentDefinition, RunDefinition
@@ -118,7 +119,7 @@ class ReportServer(ThreadingHTTPServer):
         self._children: list[tuple[StaticResultServer, threading.Thread, Path]] = []
         self._children_lock = threading.Lock()
         try:
-            self._launchable, self._baselines = self._validate_identity()
+            self._launchable, self._baselines, self._adjudication_outputs = self._validate_identity()
             super().__init__(address, ReportServerHandler)
         except Exception:
             shutil.rmtree(self.launch_root, ignore_errors=True)
@@ -181,6 +182,7 @@ class ReportServer(ThreadingHTTPServer):
         }
         results: dict[str, _LaunchableResult] = {}
         baselines: dict[str, _LaunchableBaseline | BaselineUnavailableError] = {}
+        adjudication_outputs: dict[str, Path] = {}
         run_ids = report.get("included_run_ids")
         if not isinstance(run_ids, list) or any(not isinstance(item, str) for item in run_ids):
             raise ReportServerError("report has invalid included run identities")
@@ -200,6 +202,7 @@ class ReportServer(ThreadingHTTPServer):
             if artifact.run_id != run_id or artifact.experiment_id != state.experiment_id:
                 raise ReportServerError("report and experiment output artifact identities disagree")
             results[run_id] = _LaunchableResult(run_id=run_id, artifact_root=artifact_root)
+            adjudication_outputs[run_id] = output
             resolved = run_definitions.get(run_id)
             if baseline_definition_error is not None:
                 baselines[run_id] = BaselineUnavailableError(str(baseline_definition_error))
@@ -214,7 +217,7 @@ class ReportServer(ThreadingHTTPServer):
                     )
                 except ReportServerError as exc:
                     baselines[run_id] = BaselineUnavailableError(str(exc))
-        return results, baselines
+        return results, baselines, adjudication_outputs
 
     def _load_definitions(
         self,
@@ -312,6 +315,25 @@ class ReportServer(ThreadingHTTPServer):
             self._children.append((child, thread, destination))
         return {"run_id": run_id, "kind": "baseline", "url": f"http://127.0.0.1:{child.server_address[1]}/", "fresh": True}
 
+    def adjudicate(self, run_id: str, decision: str) -> dict[str, Any]:
+        result = self._launchable.get(run_id)
+        output = self._adjudication_outputs.get(run_id)
+        if result is None or output is None:
+            raise ReportServerError("unknown, pending, or non-preserved report run")
+        if decision not in {"pass", "revoked"}:
+            raise ReportServerError("decision must be pass or revoked")
+        try:
+            record = append_adjudication(
+                experiment_output=output, artifact_root=result.artifact_root, run_id=run_id, decision=decision,
+            )
+        except (AdjudicationError, PreservationError) as exc:
+            raise ReportServerError(f"manual adjudication was not recorded: {exc}") from exc
+        return {
+            "run_id": run_id, "decision": record.decision, "revision": record.revision,
+            "effective_functional_status": "pass" if record.decision == "pass" else None,
+            "provenance": "manual human verification" if record.decision == "pass" else None,
+        }
+
     def close(self) -> None:
         """Close child origins and delete only disposable restored copies."""
         with self._children_lock:
@@ -344,7 +366,7 @@ class ReportServerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         endpoint = urlparse(self.path).path
-        if endpoint not in {"/api/launch-result", "/api/launch-baseline"}:
+        if endpoint not in {"/api/launch-result", "/api/launch-baseline", "/api/adjudicate", "/api/adjudicate/undo"}:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         try:
@@ -352,8 +374,12 @@ class ReportServerHandler(BaseHTTPRequestHandler):
             run_id = payload.get("run_id")
             if not isinstance(run_id, str) or not run_id:
                 raise ReportServerError("run_id is required")
-            launch = self.server.launch_baseline if endpoint == "/api/launch-baseline" else self.server.launch
-            self._json(HTTPStatus.OK, launch(run_id))
+            if endpoint.startswith("/api/adjudicate"):
+                decision = "revoked" if endpoint.endswith("/undo") else payload.get("decision")
+                self._json(HTTPStatus.OK, self.server.adjudicate(run_id, decision if isinstance(decision, str) else ""))
+            else:
+                launch = self.server.launch_baseline if endpoint == "/api/launch-baseline" else self.server.launch
+                self._json(HTTPStatus.OK, launch(run_id))
         except ResultUnavailableError as exc:
             self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"Runnable result unavailable: {exc}"})
         except BaselineUnavailableError as exc:

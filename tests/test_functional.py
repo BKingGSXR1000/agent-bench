@@ -15,6 +15,7 @@ ROOT = Path(__file__).parents[1]
 SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v1.yaml"
 MEDIUM_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "combined-filtering-v1.yaml"
 COMPLEX_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "multi-project-migration-v1.yaml"
+V2_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v2.yaml"
 SUITE_PATH = ROOT / "functional" / "suites" / "taskboard-functional-v1.yaml"
 
 
@@ -59,6 +60,18 @@ def test_task_priority_validator_self_check_proves_known_good_and_bad_vectors(tm
     assert {test.test_id for test in results["known-bad-regression"].tests if test.outcome == "failed"} == {"baseline-delete"}
     assert results["known-bad-regression"].hard_gates["baseline_regressions"] is False
     assert (tmp_path / "self-check/known-good.json").is_file()
+
+
+def test_task_priority_v2_does_not_require_describe_task_and_marks_visual_ui_for_review(tmp_path: Path) -> None:
+    scenario = load_functional_scenario(V2_SCENARIO_PATH)
+    results = {result.run_id.removeprefix("self-"): result for result in self_validate(scenario, tmp_path / "v2-self-check")}
+    good = results["known-good"]
+    assert "describeTask" not in scenario.validator.read_text(encoding="utf-8")
+    assert good.hard_gate_pass is True
+    assert {item.test_id for item in good.tests if item.outcome == "manual_review_required"} == {
+        "priority-input-visible", "priority-displayed",
+    }
+    assert next(item for item in good.tests if item.test_id == "priority-edit").outcome == "passed"
 
 
 def test_functional_cli_writes_post_run_result(tmp_path: Path) -> None:

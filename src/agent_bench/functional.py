@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_bench.models import PortableBaselineIdentity, canonical_sha256
 from agent_bench.subject import load_frozen_subject, materialize_baseline
@@ -37,7 +37,7 @@ class FunctionalTestOutcome(BaseModel):
 
     test_id: str
     category: Literal["baseline_regression", "feature_requirement", "edge_case"]
-    outcome: Literal["passed", "failed", "error", "unavailable"]
+    outcome: Literal["passed", "failed", "error", "unavailable", "manual_review_required"]
     detail: str = ""
 
 
@@ -59,6 +59,8 @@ class FunctionalValidationResult(BaseModel):
     failed_tests: int
     unavailable_tests: int
     error_tests: int
+    # Excluded so v1's previously sealed record digest remains byte-compatible.
+    manual_review_required_tests: int = Field(default=0, exclude=True)
     score_numerator: int
     score_denominator: int
     score_percent: float
@@ -98,7 +100,7 @@ class FunctionalScenario(BaseModel):
     validator_version: str
     baseline_strategy: str = "original-frozen-baseline"
     baseline_strategy_rationale: str = ""
-    expected_baseline_outcomes: dict[str, Literal["passed", "failed"]]
+    expected_baseline_outcomes: dict[str, Literal["passed", "failed", "manual_review_required"]]
     hard_gates: dict[str, tuple[str, ...]]
     self_validation: dict[str, "SelfValidationFixture"]
 
@@ -126,7 +128,7 @@ class ExpectedResultVector(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    outcomes: dict[str, Literal["passed", "failed"]]
+    outcomes: dict[str, Literal["passed", "failed", "manual_review_required"]]
     hard_gate_pass: bool
     score_numerator: int
     score_denominator: int
@@ -347,6 +349,7 @@ def _build_result(scenario: FunctionalScenario, identity: PortableBaselineIdenti
     failed = sum(item.outcome == "failed" for item in tests)
     unavailable = sum(item.outcome == "unavailable" for item in tests)
     errors = sum(item.outcome == "error" for item in tests)
+    manual_review_required = sum(item.outcome == "manual_review_required" for item in tests)
     gates = {name: all(next(item for item in tests if item.test_id == test_id).outcome == "passed" for test_id in test_ids) for name, test_ids in scenario.hard_gates.items()}
     validator_digest = hashlib.sha256(scenario.validator.read_bytes()).hexdigest()
     return FunctionalValidationResult(
@@ -354,7 +357,8 @@ def _build_result(scenario: FunctionalScenario, identity: PortableBaselineIdenti
         validator_version=scenario.validator_version, validator_sha256=validator_digest,
         baseline_identity=identity, observed_at_utc=datetime.now(timezone.utc).isoformat(),
         total_tests=len(tests), passed_tests=passed, failed_tests=failed,
-        unavailable_tests=unavailable, error_tests=errors, score_numerator=passed,
+        unavailable_tests=unavailable, error_tests=errors,
+        manual_review_required_tests=manual_review_required, score_numerator=passed,
         score_denominator=len(tests), score_percent=round((passed / len(tests)) * 100, 6) if tests else 0.0,
         baseline_regression=counts["baseline_regression"], feature_requirements=counts["feature_requirement"], edge_cases=counts["edge_case"], hard_gate_pass=all(gates.values()), hard_gates=gates, tests=tests,
         provenance={"scenario_definition_sha256": canonical_sha256(_scenario_identity(scenario)), "baseline_strategy": scenario.baseline_strategy, "baseline_strategy_rationale": scenario.baseline_strategy_rationale, "runner": runner_provenance, **extra_provenance},

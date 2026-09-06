@@ -23,6 +23,7 @@ from agent_bench.context_storage import verify_context_analysis_artifact
 from agent_bench.completion_integrity import primary_eligibility
 from agent_bench.executor import ExperimentState
 from agent_bench.functional_storage import verify_functional_validation_artifact
+from agent_bench.adjudication import AdjudicationError, active_adjudication
 from agent_bench.matrix import expand_experiment
 from agent_bench.metrics import calculate_run_metrics
 from agent_bench.metrics_storage import verify_metrics_artifact
@@ -509,6 +510,21 @@ def _functional_values(root: Path, artifact: Path, run: Any) -> dict[str, Any]:
         or record.source_run_manifest_sha256 != run_manifest_sha
     ):
         raise ComparisonError(f"functional artifact does not link to sealed run: {run.run_id}")
+    v2_root = root / "analysis" / run.run_id / "functional-validation-v2"
+    if v2_root.is_dir():
+        candidate = verify_functional_validation_artifact(v2_root).result
+        if (candidate.run_id != run.run_id or candidate.source_artifact_manifest_sha256 != artifact_sha
+                or candidate.source_snapshot_sha256 != sealed.source_snapshot_sha256
+                or candidate.source_run_manifest_sha256 != run_manifest_sha):
+            raise ComparisonError(f"functional v2 artifact does not link to sealed run: {run.run_id}")
+        record = candidate
+    try:
+        manual = active_adjudication(root, run.run_id)
+    except AdjudicationError as exc:
+        raise ComparisonError(str(exc)) from exc
+    manual_pass = manual is not None
+    if manual_pass and (manual.source_artifact_manifest_sha256 != artifact_sha or manual.source_snapshot_sha256 != sealed.source_snapshot_sha256):
+        raise ComparisonError(f"manual adjudication does not link to sealed run: {run.run_id}")
     result = record.functional_result
     available = record.validation_status in {"pass", "fail"}
     return {
@@ -518,8 +534,8 @@ def _functional_values(root: Path, artifact: Path, run: Any) -> dict[str, Any]:
             "functional.baseline_regression_count": result.baseline_regression["failed"],
             "functional.failed_test_count": result.failed_tests,
         },
-        "provenance": {name: "functional-validation-v1" for name in names},
-        "fields": {"functional_validation_status": record.validation_status, "functional_scenario_id": record.scenario.scenario_id, "functional_tier": record.scenario.tier, "hard_gate_pass": result.hard_gate_pass if available else None, "functional_score_percent": result.score_percent if available else None},
+        "provenance": {name: "manual human verification" if manual_pass else ("functional-validation-v2" if v2_root.is_dir() else "functional-validation-v1") for name in names},
+        "fields": {"functional_validation_status": "pass" if manual_pass else record.validation_status, "functional_scenario_id": record.scenario.scenario_id, "functional_tier": record.scenario.tier, "hard_gate_pass": True if manual_pass else (result.hard_gate_pass if available else None), "functional_score_percent": result.score_percent if available else None},
     }
 
 
