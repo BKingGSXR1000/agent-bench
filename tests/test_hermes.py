@@ -5,6 +5,7 @@ import json
 import stat
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,13 +15,14 @@ from agent_bench.hermes import HermesAdapter, HermesError, HermesRuntime, build_
 from agent_bench.hermes_events import is_test_command, normalize_hermes_events
 from agent_bench.metrics import calculate_run_metrics
 from agent_bench.models import RunLimits
-from agent_bench.runner import execute_run
+from agent_bench.runner import _evidence_mapping, execute_run
 from agent_bench.timing_provenance import derive_hermes_timing_provenance
 from conftest import GitRepositoryFixture, RunFixture
 
 EXACT_PROMPT = "Inspect README.md, change the single line `status: pending` to `status: complete`, and make no other source changes.\n"
 EXACT_PROMPT_SHA256 = "03b18403ef4a275d88d1dbaaa9f92f0935a5c38631afa3bcf3c3fbe1526de67f"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_USAGE_BYTES = b'{"session_id":"hermes-fixture-session","input_tokens":10,"output_tokens":4,"reasoning_tokens":2,"api_calls":2,"completed":true}'
 
 
 def _make_executable(path: Path, source: str) -> Path:
@@ -29,8 +31,21 @@ def _make_executable(path: Path, source: str) -> Path:
     return path
 
 
-def _fake_hermes(path: Path, *, exit_code: int = 0, wait: bool = False) -> Path:
+def _fake_hermes(
+    path: Path,
+    *,
+    exit_code: int = 0,
+    wait: bool = False,
+    usage_bytes: bytes | None = DEFAULT_USAGE_BYTES,
+) -> Path:
     delay = "time.sleep(30)" if wait else ""
+    write_usage = usage_bytes is not None
+    usage_writer = (
+        "usage_path.parent.mkdir(parents=True, exist_ok=True); "
+        f"usage_path.write_bytes({usage_bytes!r})"
+        if write_usage
+        else ""
+    )
     return _make_executable(path, f'''#!/usr/bin/python3
 import json, os, pathlib, sqlite3, sys, time
 if '--version' in sys.argv:
@@ -50,7 +65,7 @@ for call_id, name in [('read-1','read_file'),('edit-1','edit_file'),('test-1','t
 db.execute('INSERT INTO messages (session_id,role,content,compacted,timestamp) VALUES (?,?,?,?,?)', ('hermes-fixture-session','assistant','summary',1,4.0))
 db.commit(); db.close()
 pathlib.Path('README.md').write_text('status: complete\\n', encoding='utf-8')
-usage_path.parent.mkdir(parents=True, exist_ok=True); usage_path.write_text(json.dumps({{'session_id':'hermes-fixture-session','input_tokens':10,'output_tokens':4,'reasoning_tokens':2,'api_calls':2,'completed':True}}), encoding='utf-8')
+{usage_writer}
 print('done'); sys.stderr.write('hermes fixture stderr\\n')
 {delay}
 raise SystemExit({exit_code})
@@ -164,18 +179,67 @@ def test_native_normalization_recognizes_upstream_patch_and_search_files(tmp_pat
 
 
 def test_adapter_preserves_native_session_prompt_and_events(tmp_path: Path, git_repository: GitRepositoryFixture, run_fixture: RunFixture) -> None:
-    executable = _fake_hermes(tmp_path / 'hermes')
+    emitted_usage = b'{\n  "completed": true,\n  "session_id": "hermes-fixture-session"\n}\n'
+    executable = _fake_hermes(tmp_path / 'hermes', usage_bytes=emitted_usage)
     definition = run_fixture.run_definition.model_copy(update={'run_id':'hermes-fixture-success','harness_id':'hermes','profile_id':'hermes-default-v1','limits':RunLimits(wall_timeout_seconds=5),'prompt_sha256':EXACT_PROMPT_SHA256})
     result = execute_run(run_definition=definition, prompt_content=EXACT_PROMPT, adapter=HermesAdapter(_profile_for(executable), verify_toolchain=False), artifacts_root=git_repository.artifacts_root, worktrees_root=git_repository.worktrees_root, isolation_root=tmp_path / 'isolation', proxy_endpoint='http://127.0.0.1:18081/v1', run_seed=1001)
     raw, normalized = load_raw_events(result.raw_event_path), load_normalized_events(result.normalized_event_path)
     assert result.run_manifest.observed_execution_outcome == 'success'
     assert (result.artifact_path / 'raw/hermes/prompt-transport.bin').read_bytes() == EXACT_PROMPT.encode()
-    assert (result.artifact_path / 'raw/hermes/usage.json').is_file()
+    assert (result.artifact_path / 'raw/hermes/usage.json').read_bytes() == emitted_usage
+    assert (result.artifact_path / 'raw/hermes/usage-observed.json').is_file()
+    assert 'raw/hermes/usage.json' in result.run_manifest.harness_evidence_paths
+    assert set(result.run_manifest.harness_evidence_paths) <= {
+        path.relative_to(result.artifact_path).as_posix()
+        for path in result.artifact_path.rglob('*') if path.is_file()
+    }
     assert (result.artifact_path / 'run/hermes/home/state.db').is_file()
     validation = next(event for event in raw if event.event_type == 'hermes_prompt_validation')
     assert validation.payload['exact_prompt_found'] is True
     assert {event.event_kind for event in normalized} >= {'reasoning','file_read','file_edit','test_execution','compaction_end'}
     assert hermes_capture_capabilities().session_identity == 'harness_exact'
+
+
+def test_usage_evidence_is_stable_after_live_file_is_removed(
+    tmp_path: Path, run_fixture: RunFixture
+) -> None:
+    emitted_usage = b'{\n "session_id": "hermes-fixture-session"\n}\n'
+    context, writer = _context(tmp_path, run_fixture)
+    result = HermesAdapter(
+        _profile_for(_fake_hermes(tmp_path / 'hermes', usage_bytes=emitted_usage)),
+        verify_toolchain=False,
+    ).run(context)
+    writer.seal()
+
+    evidence_root = context.paths.harness_state / 'hermes'
+    captured = evidence_root / 'usage-captured.json'
+    assert captured.read_bytes() == emitted_usage
+    assert not (evidence_root / 'usage.json').exists()
+    declared = dict(result.evidence_files)
+    assert declared['raw/hermes/usage.json'] == captured
+
+    runtime = SimpleNamespace(harness_state=context.paths.harness_state)
+    first = _evidence_mapping(runtime, result, ())
+    second = _evidence_mapping(runtime, result, ())
+    assert first == second
+    assert first['raw/hermes/usage.json'] == captured
+
+
+@pytest.mark.parametrize(
+    ('usage_bytes', 'message'),
+    ((None, 'cannot read Hermes usage file'), (b'{', 'invalid Hermes usage JSON')),
+)
+def test_adapter_fails_closed_when_usage_cannot_be_captured(
+    tmp_path: Path, run_fixture: RunFixture, usage_bytes: bytes | None, message: str
+) -> None:
+    context, writer = _context(tmp_path, run_fixture)
+    adapter = HermesAdapter(
+        _profile_for(_fake_hermes(tmp_path / 'hermes', usage_bytes=usage_bytes)),
+        verify_toolchain=False,
+    )
+    with pytest.raises(HermesError, match=message):
+        adapter.run(context)
+    writer.seal()
 
 
 def test_hermes_sqlite_export_timestamps_are_not_execution_timing(tmp_path: Path, git_repository: GitRepositoryFixture, run_fixture: RunFixture) -> None:

@@ -370,8 +370,15 @@ class HermesAdapter:
             raise HermesError("Hermes output reader did not finish")
         if errors:
             raise HermesError(f"Hermes output capture failed: {errors[0]}")
-        usage = _load_json(usage_file)
+        usage_capture = evidence_root / "usage-captured.json"
+        _, usage = _capture_usage_file(usage_file, usage_capture)
         _write_json(evidence_root / "usage-observed.json", usage)
+        try:
+            usage_file.unlink()
+        except OSError as exc:
+            raise HermesError(
+                f"cannot remove captured Hermes usage file {usage_file}: {exc}"
+            ) from exc
         session_id = usage.get("session_id") if isinstance(usage.get("session_id"), str) else None
         records = _export_session_records(hermes_home / "state.db", session_id)
         _write_json(evidence_root / "session-records.json", records)
@@ -394,7 +401,7 @@ class HermesAdapter:
         records: dict[str, Path] = {
             "raw/hermes/stdout.log": evidence_root / "stdout.log", "raw/hermes/stderr.log": evidence_root / "stderr.log",
             "raw/hermes/prompt-transport.bin": evidence_root / "prompt-transport.bin", "raw/hermes/invocation.json": evidence_root / "invocation.json",
-            "raw/hermes/usage.json": evidence_root / "usage.json", "raw/hermes/usage-observed.json": evidence_root / "usage-observed.json",
+            "raw/hermes/usage.json": evidence_root / "usage-captured.json", "raw/hermes/usage-observed.json": evidence_root / "usage-observed.json",
             "raw/hermes/session-records.json": evidence_root / "session-records.json",
         }
         for source in sorted((context.paths.harness_state / "hermes-home").rglob("*")):
@@ -503,12 +510,26 @@ def _parse_version(value: str) -> str:
     return ""
 
 
-def _load_json(path: Path) -> dict[str, object]:
+def _capture_usage_file(path: Path, destination: Path) -> tuple[bytes, dict[str, object]]:
+    """Capture Hermes-owned usage bytes before returning any evidence paths."""
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return raw if isinstance(raw, dict) else {"parse_error": "usage JSON is not an object"}
-    except (OSError, json.JSONDecodeError) as exc:
-        return {"parse_error": str(exc)}
+        raw_bytes = path.read_bytes()
+    except OSError as exc:
+        raise HermesError(f"cannot read Hermes usage file {path}: {exc}") from exc
+    try:
+        raw = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HermesError(f"invalid Hermes usage JSON {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise HermesError(f"invalid Hermes usage JSON {path}: expected an object")
+    try:
+        with destination.open("xb") as output:
+            output.write(raw_bytes)
+            output.flush()
+            os.fsync(output.fileno())
+    except OSError as exc:
+        raise HermesError(f"cannot capture Hermes usage file {destination}: {exc}") from exc
+    return raw_bytes, raw
 
 
 def _terminate_owned_process(process: subprocess.Popen[bytes]) -> None:
