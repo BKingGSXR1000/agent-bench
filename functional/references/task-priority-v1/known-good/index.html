@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Taskboard</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <header><h1>Taskboard</h1><p>Keep small pieces of work moving.</p></header>
+      <form id="task-form">
+        <label>Task <input id="task-title" required maxlength="100" autocomplete="off"></label>
+        <label>Status <select id="task-status"><option>Todo</option><option>Doing</option><option>Done</option></select></label>
+        <label>Priority <select id="task-priority"><option>Low</option><option selected>Medium</option><option>High</option></select></label>
+        <button>Add task</button>
+      </form>
+      <p id="form-error" role="alert"></p>
+      <label class="filter">Show <select id="status-filter"><option value="all">All tasks</option><option>Todo</option><option>Doing</option><option>Done</option></select></label>
+      <ul id="task-list" aria-live="polite"></ul>
+      <p id="empty-state">No tasks yet. Add one to get started.</p>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

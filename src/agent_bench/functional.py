@@ -49,7 +49,7 @@ class FunctionalValidationResult(BaseModel):
     schema_version: Literal["1.0.0"] = FUNCTIONAL_SCHEMA_VERSION
     scenario_id: str
     run_id: str
-    validation_mode: Literal["baseline_discrimination", "post_run"]
+    validation_mode: Literal["baseline_discrimination", "post_run", "validator_self_check"]
     validator_version: str
     validator_sha256: str
     baseline_identity: PortableBaselineIdentity
@@ -83,6 +83,7 @@ class FunctionalScenario(BaseModel):
     validator_version: str
     expected_baseline_outcomes: dict[str, Literal["passed", "failed"]]
     hard_gates: dict[str, tuple[str, ...]]
+    self_validation: dict[str, "SelfValidationFixture"]
 
     @model_validator(mode="after")
     def validate_gates(self) -> "FunctionalScenario":
@@ -92,7 +93,42 @@ class FunctionalScenario(BaseModel):
         missing = sorted({test for tests in self.hard_gates.values() for test in tests} - expected)
         if missing:
             raise ValueError(f"hard gates reference unknown tests: {', '.join(missing)}")
+        if "untouched-baseline" not in self.self_validation:
+            raise ValueError("self_validation must include untouched-baseline")
+        for fixture_id, fixture in self.self_validation.items():
+            fixture_tests = set(fixture.expected.outcomes)
+            if fixture_tests != expected:
+                raise ValueError(f"self_validation {fixture_id} test IDs differ from scenario definition")
+        if self.self_validation["untouched-baseline"].expected.outcomes != self.expected_baseline_outcomes:
+            raise ValueError("untouched-baseline self-validation vector differs from expected_baseline_outcomes")
         return self
+
+
+class ExpectedResultVector(BaseModel):
+    """Recorded exact pass/fail outcome vector for an evaluator fixture."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcomes: dict[str, Literal["passed", "failed"]]
+    hard_gate_pass: bool
+    score_numerator: int
+    score_denominator: int
+
+    @model_validator(mode="after")
+    def validate_score(self) -> "ExpectedResultVector":
+        passed = sum(outcome == "passed" for outcome in self.outcomes.values())
+        if self.score_denominator != len(self.outcomes) or self.score_numerator != passed:
+            raise ValueError("expected score must exactly match expected outcomes")
+        return self
+
+
+class SelfValidationFixture(BaseModel):
+    """Evaluator-owned overlays and the exact result expected from them."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    overlays: tuple[Path, ...] = ()
+    expected: ExpectedResultVector
 
 
 def load_functional_scenario(path: Path) -> FunctionalScenario:
@@ -112,7 +148,17 @@ def load_functional_scenario(path: Path) -> FunctionalScenario:
     validator = (definition.parent / scenario.validator).resolve()
     if not validator.is_file():
         raise FunctionalValidationError(f"functional validator is missing: {validator}")
-    return scenario.model_copy(update={"subject_root": subject_root, "validator": validator})
+    fixtures = {
+        fixture_id: fixture.model_copy(update={
+            "overlays": tuple((definition.parent / overlay).resolve() for overlay in fixture.overlays),
+        })
+        for fixture_id, fixture in scenario.self_validation.items()
+    }
+    for fixture_id, fixture in fixtures.items():
+        for overlay in fixture.overlays:
+            if not overlay.is_dir():
+                raise FunctionalValidationError(f"self-validation overlay for {fixture_id} is missing: {overlay}")
+    return scenario.model_copy(update={"subject_root": subject_root, "validator": validator, "self_validation": fixtures})
 
 
 def baseline_check(scenario: FunctionalScenario, output: Path) -> FunctionalValidationResult:
@@ -152,6 +198,49 @@ def validate_workspace(
     )
     _write_new_result(output, result)
     return result
+
+
+def self_validate(
+    scenario: FunctionalScenario, output: Path,
+) -> tuple[FunctionalValidationResult, ...]:
+    """Prove validator acceptance and rejection behavior using owned fixtures.
+
+    Every fixture begins from a newly materialized frozen bundle.  Reference
+    overlays are copied only into that temporary checkout; neither the tracked
+    baseline source nor an agent workspace can be mutated by this command.
+    """
+    destination = output.expanduser().resolve()
+    if destination.exists():
+        raise FunctionalValidationError(f"self-validation output already exists and is immutable: {destination}")
+    subject = load_frozen_subject(scenario.subject_root)
+    built: list[tuple[str, FunctionalValidationResult]] = []
+    with tempfile.TemporaryDirectory(prefix="agent-bench-functional-self-check-") as temporary:
+        temporary_root = Path(temporary)
+        for fixture_id in sorted(scenario.self_validation):
+            fixture = scenario.self_validation[fixture_id]
+            workspace = materialize_baseline(subject, temporary_root / fixture_id)
+            for overlay in fixture.overlays:
+                _apply_overlay(overlay, workspace)
+            tests, runner_provenance = _run_validator(scenario, workspace)
+            result = _build_result(
+                scenario, subject.identity, f"self-{fixture_id}", "validator_self_check", tests,
+                runner_provenance,
+                {
+                    "self_validation_fixture": fixture_id,
+                    "overlay_sha256": tuple(_directory_digest(overlay) for overlay in fixture.overlays),
+                    "expected_result_vector_sha256": canonical_sha256(fixture.expected.model_dump(mode="json")),
+                },
+            )
+            _verify_expected_vector(fixture_id, result, fixture.expected)
+            built.append((fixture_id, result))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destination.mkdir()
+    except FileExistsError as exc:
+        raise FunctionalValidationError(f"self-validation output already exists and is immutable: {destination}") from exc
+    for fixture_id, result in built:
+        _write_new_result(destination / f"{fixture_id}.json", result)
+    return tuple(result for _, result in built)
 
 
 def _run_validator(
@@ -195,7 +284,7 @@ def _category(test_id: str) -> Literal["baseline_regression", "feature_requireme
     return "feature_requirement"
 
 
-def _build_result(scenario: FunctionalScenario, identity: PortableBaselineIdentity, run_id: str, mode: Literal["baseline_discrimination", "post_run"], tests: tuple[FunctionalTestOutcome, ...], runner_provenance: dict[str, object], extra_provenance: dict[str, object]) -> FunctionalValidationResult:
+def _build_result(scenario: FunctionalScenario, identity: PortableBaselineIdentity, run_id: str, mode: Literal["baseline_discrimination", "post_run", "validator_self_check"], tests: tuple[FunctionalTestOutcome, ...], runner_provenance: dict[str, object], extra_provenance: dict[str, object]) -> FunctionalValidationResult:
     counts = {category: _counts(tuple(item for item in tests if item.category == category)) for category in ("baseline_regression", "feature_requirement", "edge_case")}
     passed = sum(item.outcome == "passed" for item in tests)
     failed = sum(item.outcome == "failed" for item in tests)
@@ -238,7 +327,44 @@ def _scenario_identity(scenario: FunctionalScenario) -> dict[str, object]:
         "validator_version": scenario.validator_version,
         "expected_baseline_outcomes": scenario.expected_baseline_outcomes,
         "hard_gates": scenario.hard_gates,
+        "self_validation": {
+            fixture_id: fixture.expected.model_dump(mode="json")
+            for fixture_id, fixture in scenario.self_validation.items()
+        },
     }
+
+
+def _apply_overlay(overlay: Path, workspace: Path) -> None:
+    """Copy a trusted evaluator overlay into a disposable materialized baseline."""
+    for source in sorted(overlay.rglob("*")):
+        relative = source.relative_to(overlay)
+        if relative.parts and relative.parts[0] == ".git":
+            raise FunctionalValidationError(f"self-validation overlay may not contain .git: {overlay}")
+        if source.is_dir():
+            continue
+        if not source.is_file() or source.is_symlink():
+            raise FunctionalValidationError(f"self-validation overlay contains unsupported entry: {source}")
+        target = workspace / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+
+def _verify_expected_vector(
+    fixture_id: str, result: FunctionalValidationResult, expected: ExpectedResultVector,
+) -> None:
+    observed = {test.test_id: test.outcome for test in result.tests}
+    if observed != expected.outcomes:
+        raise FunctionalValidationError(
+            f"self-validation {fixture_id} result vector differs: expected {expected.outcomes}, observed {observed}"
+        )
+    if result.hard_gate_pass != expected.hard_gate_pass:
+        raise FunctionalValidationError(
+            f"self-validation {fixture_id} hard_gate_pass differs: expected {expected.hard_gate_pass}, observed {result.hard_gate_pass}"
+        )
+    if (result.score_numerator, result.score_denominator) != (expected.score_numerator, expected.score_denominator):
+        raise FunctionalValidationError(
+            f"self-validation {fixture_id} score differs: expected {expected.score_numerator}/{expected.score_denominator}, observed {result.score_numerator}/{result.score_denominator}"
+        )
 
 
 def _directory_digest(root: Path) -> str:

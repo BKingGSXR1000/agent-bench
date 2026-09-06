@@ -32,6 +32,21 @@ the exact recorded vector is observed: all baseline-regression tests pass while
 the deliberately absent priority tests fail. This is a successful
 discrimination check, not a benchmark failure.
 
+Before a scenario is considered validated, prove the validator itself with:
+
+```sh
+agent-bench functional self-check functional/scenarios/task-priority-v1.yaml \
+  --output /new/location/task-priority-self-check
+```
+
+This command starts a new disposable bundle checkout for each evaluator-owned
+fixture and never changes either the frozen subject or an agent workspace. It
+records one create-only JSON result per fixture. For `task-priority-v1`, the
+fixtures are the untouched baseline, a complete reference implementation, a
+priority-not-persisted mutation, and a regression-breaking delete mutation.
+Reference overlays live under `functional/references/`, outside the subject
+workspace exposed to agents.
+
 After preserving a completed agent workspace, run:
 
 ```sh
@@ -52,6 +67,23 @@ passed tests over all available tests. `hard_gate_pass` is separate: a numerical
 score never masks a critical failure. Infrastructure absence is recorded as
 `unavailable`; malformed/failed validation infrastructure is `error`; neither
 is silently reclassified as an ordinary functional failure.
+
+## Validator self-validation invariant
+
+A functional scenario is not considered validated until all four conditions
+hold:
+
+1. baseline health is known-good;
+2. the untouched baseline produces its recorded discrimination vector;
+3. a known-good implementation passes the complete acceptance suite with every
+   hard gate passing; and
+4. targeted known-bad implementations are rejected for their recorded reasons.
+
+The M12 priority self-check makes the last condition concrete: the persistence
+mutation fails only `priority-persists`, while the regression mutation fails
+`baseline-delete` and therefore the baseline-regressions hard gate. The exact
+vectors, scores, and hard-gate state are checked from the scenario definition,
+not inferred from prose.
 
 ## Scenario coverage
 

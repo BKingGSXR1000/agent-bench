@@ -83,6 +83,7 @@ from agent_bench.functional import (
     FunctionalValidationError,
     baseline_check,
     load_functional_scenario,
+    self_validate,
     validate_workspace,
 )
 from agent_bench.toolchains import verify_toolchains
@@ -206,6 +207,19 @@ def functional_validate(
     except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("self-check")
+def functional_self_check(
+    scenario: Path = typer.Argument(..., help="Checked-in functional scenario YAML."),
+    output: Path = typer.Option(..., "--output", help="New immutable self-validation result directory."),
+) -> None:
+    """Prove a scenario accepts its reference and rejects targeted bad fixtures."""
+    try:
+        results = self_validate(load_functional_scenario(scenario), output)
+    except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps([result.model_dump(mode="json") for result in results], ensure_ascii=False, sort_keys=True))
 
 
 @experiment_app.command("validate")

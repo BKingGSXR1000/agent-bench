@@ -1,43 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import shutil
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from agent_bench.cli import app
-from agent_bench.functional import baseline_check, load_functional_scenario, validate_workspace
+from agent_bench.functional import baseline_check, load_functional_scenario, self_validate
 
 
 ROOT = Path(__file__).parents[1]
 SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v1.yaml"
 
 
-def _priority_solution(source: Path) -> None:
-    index = source / "index.html"
-    index.write_text(
-        index.read_text(encoding="utf-8").replace(
-            '<label>Status <select id="task-status"><option>Todo</option><option>Doing</option><option>Done</option></select></label>',
-            '<label>Status <select id="task-status"><option>Todo</option><option>Doing</option><option>Done</option></select></label><label>Priority <select><option>Low</option><option>Medium</option><option>High</option></select></label>',
-        ),
-        encoding="utf-8",
-    )
-    constants = source / "src/constants.js"
-    constants.write_text(
-        constants.read_text(encoding="utf-8") + "\nexport const PRIORITIES = Object.freeze([\"Low\", \"Medium\", \"High\"]);\nexport function validPriority(value) { return PRIORITIES.includes(value); }\n",
-        encoding="utf-8",
-    )
-    taskboard = source / "src/taskboard.js"
-    text = taskboard.read_text(encoding="utf-8")
-    text = text.replace('import { TASK_STORAGE_KEY, STATUSES, validStatus } from "./constants.js";', 'import { TASK_STORAGE_KEY, STATUSES, validStatus, validPriority } from "./constants.js";')
-    text = text.replace('return { id: value.id, title: value.title, status: validStatus(value.status) ? value.status : "Todo" };', 'return { id: value.id, title: value.title, status: validStatus(value.status) ? value.status : "Todo", priority: validPriority(value.priority) ? value.priority : "Medium" };')
-    text = text.replace('return `${task.title} · ${task.status}`;', 'return `${task.title} · ${task.status} · ${task.priority}`;')
-    text = text.replace('createTask({ title, status = "Todo" }) {', 'createTask({ title, status = "Todo", priority = "Medium" }) {')
-    text = text.replace('if (!cleanTitle || !validStatus(status))', 'if (!cleanTitle || !validStatus(status) || !validPriority(priority))')
-    text = text.replace('const task = { id: taskId(), title: cleanTitle, status };', 'const task = { id: taskId(), title: cleanTitle, status, priority };')
-    text = text.replace('this.save(); return task;\n  }\n\n  deleteTask', 'if ("priority" in changes) { if (!validPriority(changes.priority)) throw new Error("Invalid task priority."); task.priority = changes.priority; }\n    this.save(); return task;\n  }\n\n  deleteTask')
-    taskboard.write_text(text, encoding="utf-8")
+def _source_fingerprint(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
 
 
 def test_task_priority_baseline_discrimination_and_immutable_result(tmp_path: Path) -> None:
@@ -58,17 +40,21 @@ def test_task_priority_baseline_discrimination_and_immutable_result(tmp_path: Pa
         raise AssertionError("an existing validation result must never be overwritten")
 
 
-def test_task_priority_solution_scores_independently_from_hard_gates(tmp_path: Path) -> None:
+def test_task_priority_validator_self_check_proves_known_good_and_bad_vectors(tmp_path: Path) -> None:
     scenario = load_functional_scenario(SCENARIO_PATH)
-    workspace = tmp_path / "solution"
-    shutil.copytree(ROOT / "subjects/taskboard-v1/baseline-repo", workspace)
-    _priority_solution(workspace)
-    result = validate_workspace(scenario, workspace, "synthetic-priority-run", tmp_path / "solution.json")
+    subject_source = ROOT / "subjects/taskboard-v1/baseline-repo"
+    before = _source_fingerprint(subject_source)
+    results = {result.run_id.removeprefix("self-"): result for result in self_validate(scenario, tmp_path / "self-check")}
 
-    assert result.score_numerator == result.score_denominator == 16
-    assert result.score_percent == 100
-    assert result.hard_gate_pass is True
-    assert result.baseline_regression == {"total": 7, "passed": 7, "failed": 0, "unavailable": 0, "error": 0}
+    assert _source_fingerprint(subject_source) == before
+    assert not (subject_source / "functional").exists()
+    assert results["known-good"].score_numerator == results["known-good"].score_denominator == 16
+    assert results["known-good"].hard_gate_pass is True
+    assert {test.test_id for test in results["known-bad-persistence"].tests if test.outcome == "failed"} == {"priority-persists"}
+    assert results["known-bad-persistence"].hard_gate_pass is False
+    assert {test.test_id for test in results["known-bad-regression"].tests if test.outcome == "failed"} == {"baseline-delete"}
+    assert results["known-bad-regression"].hard_gates["baseline_regressions"] is False
+    assert (tmp_path / "self-check/known-good.json").is_file()
 
 
 def test_functional_cli_writes_post_run_result(tmp_path: Path) -> None:
@@ -78,3 +64,14 @@ def test_functional_cli_writes_post_run_result(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert json.loads(output.read_text(encoding="utf-8"))["failed_tests"] == 9
+
+
+def test_functional_self_check_cli_writes_all_fixture_results(tmp_path: Path) -> None:
+    runner = CliRunner()
+    output = tmp_path / "self-check"
+    result = runner.invoke(app, ["functional", "self-check", str(SCENARIO_PATH), "--output", str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(path.name for path in output.glob("*.json")) == [
+        "known-bad-persistence.json", "known-bad-regression.json", "known-good.json", "untouched-baseline.json",
+    ]
