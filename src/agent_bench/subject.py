@@ -55,11 +55,19 @@ def load_frozen_subject(root: Path) -> FrozenSubject:
     return FrozenSubject(subject_root, identity, source, bundle)
 
 
-def materialize_baseline(subject: FrozenSubject, destination: Path) -> Path:
+def materialize_baseline(
+    subject: FrozenSubject,
+    destination: Path,
+    *,
+    verify_tracked_source: bool = True,
+) -> Path:
     """Clone the tracked bundle to a new clean repository and verify its tree.
 
     The destination must not already exist: no previously mutable checkout is
-    ever reused as a baseline for a benchmark run.
+    ever reused as a baseline for a benchmark run.  ``verify_tracked_source``
+    additionally compares the mutable convenience checkout to the bundle;
+    callers that must launch from the frozen bundle despite a dirty checkout
+    can disable only that extra comparison.
     """
     target = destination.expanduser().resolve()
     if target.exists():
@@ -74,7 +82,7 @@ def materialize_baseline(subject: FrozenSubject, destination: Path) -> Path:
         raise SubjectError("materialized baseline commit/tree differs from subject identity")
     if status:
         raise SubjectError("newly materialized baseline is not clean")
-    if _source_fingerprint(subject.source_directory) != _source_fingerprint(target):
+    if verify_tracked_source and _source_fingerprint(subject.source_directory) != _source_fingerprint(target):
         raise SubjectError("tracked baseline source differs from the verified bundle")
     return target
 
