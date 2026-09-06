@@ -17,6 +17,14 @@ small documented JavaScript domain interface shared by its browser UI and its
 visible baseline test. The hidden validator exercises that public behavior in
 Node without a browser, network, package install, GPU, or visible GUI.
 
+`combined-filtering-v1` is the Medium scenario. It deliberately uses strategy
+**B**, the separately frozen `taskboard-priority-v1` derived baseline, rather
+than asking agents to add priority and filtering in one run. Its scenario
+identity and each result provenance record that strategy and rationale. Priority
+is consequently a regression contract in Medium; search, three persisted
+filters, AND semantics, active-filter edits/deletes, clear-all, and recoverable
+zero results are the requested work.
+
 ## Lifecycle
 
 Before benchmark execution, run:
@@ -85,11 +93,17 @@ mutation fails only `priority-persists`, while the regression mutation fails
 vectors, scores, and hard-gate state are checked from the scenario definition,
 not inferred from prose.
 
+The Medium self-check applies the same invariant to a known-good filtering
+reference, OR-semantics mutation, filter-persistence mutation, and delete
+regression mutation. Its hard gates independently cover baseline regressions,
+combined-filter AND semantics, filter persistence, and active-filter
+interactions.
+
 ## Scenario coverage
 
 The initial easy scenario checks Taskboard's existing initialization, CRUD,
 status handling, persistence, and filtering; then Low/Medium/High creation,
 display contract, persistence, editing, legacy records without priority, and
-invalid stored priority. Future medium and complex acceptance designs are in
-`functional/scenarios/taskboard-v1-future-scenarios.md`; they are not wired as
-benchmark scenarios yet.
+invalid stored priority. The implemented Medium scenario is specified in
+`functional/scenarios/combined-filtering-v1.md`. The complex project/migration
+design remains future work in `functional/scenarios/taskboard-v1-future-scenarios.md`.

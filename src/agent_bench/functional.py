@@ -81,6 +81,8 @@ class FunctionalScenario(BaseModel):
     subject_root: Path
     validator: Path
     validator_version: str
+    baseline_strategy: str = "original-frozen-baseline"
+    baseline_strategy_rationale: str = ""
     expected_baseline_outcomes: dict[str, Literal["passed", "failed"]]
     hard_gates: dict[str, tuple[str, ...]]
     self_validation: dict[str, "SelfValidationFixture"]
@@ -300,7 +302,7 @@ def _build_result(scenario: FunctionalScenario, identity: PortableBaselineIdenti
         unavailable_tests=unavailable, error_tests=errors, score_numerator=passed,
         score_denominator=len(tests), score_percent=round((passed / len(tests)) * 100, 6) if tests else 0.0,
         baseline_regression=counts["baseline_regression"], feature_requirements=counts["feature_requirement"], edge_cases=counts["edge_case"], hard_gate_pass=all(gates.values()), hard_gates=gates, tests=tests,
-        provenance={"scenario_definition_sha256": canonical_sha256(_scenario_identity(scenario)), "runner": runner_provenance, **extra_provenance},
+        provenance={"scenario_definition_sha256": canonical_sha256(_scenario_identity(scenario)), "baseline_strategy": scenario.baseline_strategy, "baseline_strategy_rationale": scenario.baseline_strategy_rationale, "runner": runner_provenance, **extra_provenance},
     )
 
 
@@ -325,6 +327,8 @@ def _scenario_identity(scenario: FunctionalScenario) -> dict[str, object]:
         "schema_version": scenario.schema_version,
         "scenario_id": scenario.scenario_id,
         "validator_version": scenario.validator_version,
+        "baseline_strategy": scenario.baseline_strategy,
+        "baseline_strategy_rationale": scenario.baseline_strategy_rationale,
         "expected_baseline_outcomes": scenario.expected_baseline_outcomes,
         "hard_gates": scenario.hard_gates,
         "self_validation": {

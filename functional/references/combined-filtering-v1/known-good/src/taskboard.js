@@ -1,0 +1,20 @@
+import { TASK_STORAGE_KEY, validPriority, validStatus } from "./constants.js";
+import { taskMatches } from "./filtering.js";
+import { EMPTY_FILTERS, loadFilters, saveFilters } from "./filter-storage.js";
+import { removeTask } from "./task-mutations.js";
+function taskId() { return `task-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
+function normalizeTask(value) { if (!value || typeof value !== "object" || typeof value.id !== "string" || typeof value.title !== "string") return null; return { id: value.id, title: value.title, description: typeof value.description === "string" ? value.description : "", status: validStatus(value.status) ? value.status : "Todo", priority: validPriority(value.priority) ? value.priority : "Medium" }; }
+export function describeTask(task) { return `${task.title} · ${task.status} · ${task.priority}${task.description ? ` · ${task.description}` : ""}`; }
+export class TaskBoard {
+  constructor(storage) { this.storage = storage; this.tasks = this.load(); this.filters = loadFilters(storage); }
+  load() { try { const stored = JSON.parse(this.storage.getItem(TASK_STORAGE_KEY) || "[]"); return Array.isArray(stored) ? stored.map(normalizeTask).filter(Boolean) : []; } catch { return []; } }
+  save() { this.storage.setItem(TASK_STORAGE_KEY, JSON.stringify(this.tasks)); }
+  createTask({ title, description = "", status = "Todo", priority = "Medium" }) { const cleanTitle = typeof title === "string" ? title.trim() : ""; if (!cleanTitle || !validStatus(status) || !validPriority(priority)) throw new Error("A task title, valid status, and valid priority are required."); const task = { id: taskId(), title: cleanTitle, description: typeof description === "string" ? description.trim() : "", status, priority }; this.tasks.unshift(task); this.save(); return task; }
+  editTask(id, changes) { const task = this.tasks.find((item) => item.id === id); if (!task) throw new Error("Task not found."); if ("title" in changes) { const title = String(changes.title).trim(); if (!title) throw new Error("Task title is required."); task.title = title; } if ("description" in changes) task.description = String(changes.description).trim(); if ("status" in changes) { if (!validStatus(changes.status)) throw new Error("Invalid task status."); task.status = changes.status; } if ("priority" in changes) { if (!validPriority(changes.priority)) throw new Error("Invalid task priority."); task.priority = changes.priority; } this.save(); return task; }
+  deleteTask(id) { const before = this.tasks.length; this.tasks = removeTask(this.tasks, id); if (before !== this.tasks.length) this.save(); return before !== this.tasks.length; }
+  changeStatus(id, status) { return this.editTask(id, { status }); }
+  setFilter(filter) { return this.setFilters({ status: filter }); }
+  setFilters(changes) { const next = { ...this.filters, ...changes }; if (typeof next.query !== "string" || (next.status !== "all" && !validStatus(next.status)) || (next.priority !== "all" && !validPriority(next.priority))) throw new Error("Invalid filters."); this.filters = { query: next.query, status: next.status, priority: next.priority }; saveFilters(this.storage, this.filters); }
+  clearFilters() { this.filters = { ...EMPTY_FILTERS }; saveFilters(this.storage, this.filters); }
+  visibleTasks() { return this.tasks.filter((task) => taskMatches(task, this.filters)); }
+}

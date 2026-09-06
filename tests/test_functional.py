@@ -12,6 +12,7 @@ from agent_bench.functional import baseline_check, load_functional_scenario, sel
 
 ROOT = Path(__file__).parents[1]
 SCENARIO_PATH = ROOT / "functional" / "scenarios" / "task-priority-v1.yaml"
+MEDIUM_SCENARIO_PATH = ROOT / "functional" / "scenarios" / "combined-filtering-v1.yaml"
 
 
 def _source_fingerprint(root: Path) -> dict[str, str]:
@@ -75,3 +76,23 @@ def test_functional_self_check_cli_writes_all_fixture_results(tmp_path: Path) ->
     assert sorted(path.name for path in output.glob("*.json")) == [
         "known-bad-persistence.json", "known-bad-regression.json", "known-good.json", "untouched-baseline.json",
     ]
+
+
+def test_combined_filtering_self_check_proves_derived_baseline_and_targeted_rejections(tmp_path: Path) -> None:
+    scenario = load_functional_scenario(MEDIUM_SCENARIO_PATH)
+    source = ROOT / "subjects/taskboard-priority-v1/baseline-repo"
+    before = _source_fingerprint(source)
+    results = {result.run_id.removeprefix("self-"): result for result in self_validate(scenario, tmp_path / "medium-self-check")}
+
+    assert scenario.baseline_strategy == "derived-priority-baseline"
+    assert _source_fingerprint(source) == before
+    assert results["untouched-baseline"].score_numerator == 8
+    assert results["known-good"].score_numerator == results["known-good"].score_denominator == 30
+    assert results["known-good"].hard_gate_pass is True
+    assert {item.test_id for item in results["known-bad-or-semantics"].tests if item.outcome == "failed"} == {
+        "combine-search-status", "combine-search-priority", "combine-status-priority", "combine-all-filters", "combine-and-not-or",
+    }
+    assert {item.test_id for item in results["known-bad-no-filter-persistence"].tests if item.outcome == "failed"} == {
+        "filter-state-search-persists", "filter-state-status-persists", "filter-state-priority-persists", "filter-state-reload-visible",
+    }
+    assert results["known-bad-delete-regression"].hard_gates["baseline_regressions"] is False

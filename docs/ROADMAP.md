@@ -234,13 +234,15 @@ Status: completed
 
 Implements a separate, deterministic and headless functional-validation
 dimension. M12 adds frozen `taskboard-v1`, its visible Node baseline check, the
-evaluator-owned `task-priority-v1` acceptance suite, recorded untouched-baseline
-discrimination, create-only versioned JSON results, individual outcomes,
-category counts, separate hard gates and scoring, and `agent-bench functional
-baseline-check` / `agent-bench functional validate` commands. It deliberately
-does not change live executor behavior, generate a composite efficiency score,
-or run a browser/GPU/real harness. Future medium and complex Taskboard designs
-are specifications only.
+evaluator-owned `task-priority-v1` acceptance suite, and the Medium
+`combined-filtering-v1` suite over a separately frozen priority-derived
+baseline. Both have recorded untouched-baseline discrimination, known-good and
+targeted known-bad validator self-validation, create-only versioned JSON
+results, individual outcomes, category counts, separate hard gates and scoring,
+and `agent-bench functional baseline-check` / `agent-bench functional validate`
+/ `agent-bench functional self-check` commands. It deliberately does not change
+live executor behavior, generate a composite efficiency score, or run a
+browser/GPU/real harness. The complex Taskboard design remains a specification.
 
 ## M11 — Qualitative reasoning export
 
