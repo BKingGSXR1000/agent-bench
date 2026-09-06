@@ -228,6 +228,20 @@ the baseline dataset. Future harness-profile matrices remain a new explicitly
 planned experiment: 3 profiles per harness would expand the current 135-cell
 default-profile matrix to 405 cells while keeping model/backend fixed.
 
+## M12 — Automated Functional Benchmark Suite v1
+
+Status: completed
+
+Implements a separate, deterministic and headless functional-validation
+dimension. M12 adds frozen `taskboard-v1`, its visible Node baseline check, the
+evaluator-owned `task-priority-v1` acceptance suite, recorded untouched-baseline
+discrimination, create-only versioned JSON results, individual outcomes,
+category counts, separate hard gates and scoring, and `agent-bench functional
+baseline-check` / `agent-bench functional validate` commands. It deliberately
+does not change live executor behavior, generate a composite efficiency score,
+or run a browser/GPU/real harness. Future medium and complex Taskboard designs
+are specifications only.
+
 ## M11 — Qualitative reasoning export
 
 Optional later phase.

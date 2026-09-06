@@ -79,6 +79,12 @@ from agent_bench.executor import (
     status as executor_status,
 )
 from agent_bench.subject import SubjectError, load_frozen_subject
+from agent_bench.functional import (
+    FunctionalValidationError,
+    baseline_check,
+    load_functional_scenario,
+    validate_workspace,
+)
 from agent_bench.toolchains import verify_toolchains
 from agent_bench.bootstrap import BootstrapError, install_toolchains
 from agent_bench.reporting import ReportError, build_report, build_unified_report, export_public, report_status, verify_report
@@ -153,6 +159,11 @@ report_app = typer.Typer(
 app.add_typer(report_app, name="report")
 review_app = typer.Typer(help="Human-authored M10 functional acceptance reviews; never changes benchmark evidence.", no_args_is_help=True)
 app.add_typer(review_app, name="review")
+functional_app = typer.Typer(
+    help="Run deterministic headless functional scenario validation.",
+    no_args_is_help=True,
+)
+app.add_typer(functional_app, name="functional")
 _RUN_ID_ADAPTER = TypeAdapter(Identifier)
 
 
@@ -167,6 +178,34 @@ def main(
     if version:
         typer.echo(__version__)
         raise typer.Exit()
+
+
+@functional_app.command("baseline-check")
+def functional_baseline_check(
+    scenario: Path = typer.Argument(..., help="Checked-in functional scenario YAML."),
+    output: Path = typer.Option(..., "--output", help="New immutable JSON result path."),
+) -> None:
+    """Verify baseline health and the recorded baseline-discrimination vector."""
+    try:
+        result = baseline_check(load_functional_scenario(scenario), output)
+    except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+
+
+@functional_app.command("validate")
+def functional_validate(
+    scenario: Path = typer.Argument(..., help="Checked-in functional scenario YAML."),
+    workspace: Path = typer.Argument(..., help="Read-only post-agent subject workspace."),
+    run_id: str = typer.Option(..., "--run-id", help="Immutable benchmark run identity."),
+    output: Path = typer.Option(..., "--output", help="New immutable JSON result path."),
+) -> None:
+    """Validate one completed agent workspace; it is never modified."""
+    try:
+        result = validate_workspace(load_functional_scenario(scenario), workspace, run_id, output)
+    except (FunctionalValidationError, SubjectError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
 
 
 @experiment_app.command("validate")

@@ -1,0 +1,26 @@
+schema_version: 1.0.0
+scenario_id: task-priority-v1
+subject_root: ../../subjects/taskboard-v1
+validator: ../validators/task-priority-v1.mjs
+validator_version: 1.0.0
+expected_baseline_outcomes:
+  baseline-initializes: passed
+  baseline-create: passed
+  baseline-edit: passed
+  baseline-delete: passed
+  baseline-status-change: passed
+  baseline-persistence-reload: passed
+  baseline-status-filter: passed
+  priority-create-low: failed
+  priority-create-medium: failed
+  priority-create-high: failed
+  priority-input-visible: failed
+  priority-displayed: failed
+  priority-persists: failed
+  priority-edit: failed
+  edge-legacy-priority: failed
+  edge-invalid-stored-priority: failed
+hard_gates:
+  baseline_regressions: [baseline-initializes, baseline-create, baseline-edit, baseline-delete, baseline-status-change, baseline-persistence-reload, baseline-status-filter]
+  priority_round_trip: [priority-create-low, priority-create-medium, priority-create-high, priority-input-visible, priority-persists, priority-edit]
+  legacy_storage: [edge-legacy-priority, edge-invalid-stored-priority]
