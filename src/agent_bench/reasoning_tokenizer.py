@@ -18,6 +18,9 @@ class ReasoningTokenizerError(RuntimeError):
     """The requested exact tokenizer could not produce a reproducible count."""
 
 
+_TOKEN_COUNT_PATTERN = re.compile(rb"(?:token count|tokens)\s*[:=]\s*(\d+)", re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class LlamaTokenizeCounter:
     executable: Path
@@ -42,13 +45,14 @@ class LlamaTokenizeCounter:
     def count(self, text: str) -> int:
         """Count with the pinned GGUF tokenizer, never from character length."""
         try:
+            encoded_text = text.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ReasoningTokenizerError(f"reasoning text cannot be encoded as UTF-8: {exc}") from exc
+        try:
             result = subprocess.run(
                 [str(self.executable), "--model", str(self.model), "--stdin", "--show-count", "--no-bos"],
-                input=text,
+                input=encoded_text,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="strict",
                 check=False,
                 timeout=120,
             )
@@ -56,7 +60,7 @@ class LlamaTokenizeCounter:
             raise ReasoningTokenizerError(f"llama-tokenize did not complete: {exc}") from exc
         if result.returncode != 0:
             raise ReasoningTokenizerError("llama-tokenize returned a non-zero status")
-        matches = re.findall(r"(?:token count|tokens)\s*[:=]\s*(\d+)", result.stdout, flags=re.IGNORECASE)
+        matches = _TOKEN_COUNT_PATTERN.findall(result.stdout)
         if len(matches) != 1:
             raise ReasoningTokenizerError("llama-tokenize did not emit one parseable token count")
         return int(matches[0])
