@@ -65,7 +65,7 @@ class RunProgress(BaseModel):
     harness_execution_started: bool | None = None
     llm_request_observed: bool | None = None
     preservation_completed: bool | None = None
-    functional_validation_status: Literal["pass", "fail", "error", "unavailable"] | None = None
+    functional_validation_status: Literal["pass", "fail", "needs_review", "error", "unavailable"] | None = None
 
 
 class ExperimentState(BaseModel):
@@ -97,7 +97,7 @@ class DispatchOutcome:
     harness_execution_started: bool | None = None
     llm_request_observed: bool | None = None
     preservation_completed: bool | None = None
-    functional_validation_status: Literal["pass", "fail", "error", "unavailable"] | None = None
+    functional_validation_status: Literal["pass", "fail", "needs_review", "error", "unavailable"] | None = None
 
 
 Dispatch = Callable[[RunDefinition, Path], bool | DispatchOutcome]
